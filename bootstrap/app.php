@@ -15,14 +15,16 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        $middleware->append(AssignCorrelationId::class);
+        $middleware->prepend(AssignCorrelationId::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
+        $shouldRenderJson = static fn (Request $request): bool => $request->is('api/*') || $request->expectsJson();
+
         $exceptions->shouldRenderJsonWhen(
-            fn (Request $request) => $request->is('api/*') || $request->expectsJson(),
+            $shouldRenderJson,
         );
 
-        $exceptions->render(function (DomainRuleViolation $exception, Request $request) {
+        $exceptions->render(function (DomainRuleViolation $exception, Request $request) use ($shouldRenderJson) {
             $payload = [
                 'message' => $exception->getMessage(),
                 'code' => $exception->ruleCode,
@@ -30,7 +32,7 @@ return Application::configure(basePath: dirname(__DIR__))
                 'correlation_id' => $request->attributes->get('correlation_id'),
             ];
 
-            return $request->expectsJson()
+            return $shouldRenderJson($request)
                 ? response()->json($payload, 409)
                 : back()->withErrors(['domain' => $exception->failures])->withInput();
         });
