@@ -1,0 +1,8 @@
+@import "bootstrap/scss/bootstrap";
+@import "bootstrap-icons/font/bootstrap-icons.css";
+
+:root { --app-sidebar-width: 16rem; }
+body { min-height: 100vh; background: var(--bs-tertiary-bg); }
+.app-sidebar { width: var(--app-sidebar-width); }
+.skip-link { position: fixed; left: 1rem; top: -4rem; z-index: 2000; }
+.skip-link:focus { top: 1rem; }
