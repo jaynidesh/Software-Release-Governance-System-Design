@@ -9,6 +9,7 @@ export default defineConfig({
         }),
     ],
     server: {
+        origin: process.env.VITE_DEV_SERVER_ORIGIN ?? 'http://localhost:5173',
         watch: {
             ignored: ['**/storage/framework/views/**'],
         },

@@ -1,5 +1,5 @@
-<aside class="app-sidebar bg-white border-end p-3" aria-label="Primary navigation">
-    <nav>
+<aside class="app-sidebar bg-white border-end p-3">
+    <nav aria-label="Primary navigation">
         <ul class="nav nav-pills flex-column gap-1">
             <li class="nav-item">
                 <a class="nav-link active" aria-current="page" href="{{ route('home') }}">

@@ -13,7 +13,7 @@ final class SecurityHeaders
     public function handle(Request $request, Closure $next): Response
     {
         $response = $next($request);
-        $response->headers->set('Content-Security-Policy', config('security.content_security_policy'));
+        $response->headers->set('Content-Security-Policy', $this->contentSecurityPolicy());
         $response->headers->set('X-Content-Type-Options', 'nosniff');
         $response->headers->set('X-Frame-Options', 'DENY');
         $response->headers->set('Referrer-Policy', 'strict-origin-when-cross-origin');
@@ -24,5 +24,23 @@ final class SecurityHeaders
         }
 
         return $response;
+    }
+
+    private function contentSecurityPolicy(): string
+    {
+        $policy = (string) config('security.content_security_policy');
+
+        if (! app()->environment('local')) {
+            return $policy;
+        }
+
+        $viteOrigin = (string) config('security.vite_dev_server_origin');
+        $viteWebSocketOrigin = str_replace(['https://', 'http://'], ['wss://', 'ws://'], $viteOrigin);
+
+        return str_replace(
+            ["style-src 'self'", "script-src 'self'"],
+            ["style-src 'self' 'unsafe-inline' {$viteOrigin}", "script-src 'self' {$viteOrigin}"],
+            $policy,
+        )."; connect-src 'self' {$viteOrigin} {$viteWebSocketOrigin}";
     }
 }

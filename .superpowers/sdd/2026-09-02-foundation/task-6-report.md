@@ -27,3 +27,24 @@
 ## Concerns
 
 - The build succeeds but Bootstrap 5.3 Sass produces upstream Dart Sass deprecation warnings for legacy `@import` and built-ins. The task-required imports remain unchanged.
+
+## Fix round 1
+
+### Changes
+
+- The CSP is now environment-aware. Production and testing retain the unchanged strict policy. Local development adds only the configured Vite origin to `script-src`, `style-src`, and `connect-src`, with its WebSocket equivalent and the inline-style allowance required by Vite HMR.
+- `VITE_DEV_SERVER_ORIGIN` is explicitly shared by `.env.example`, the Vite server origin, and Laravel's security configuration; its default is `http://localhost:5173`.
+- The header and sidebar are distinct named navigation landmarks: `Application header` labels the top navigation and `Primary navigation` labels the nested sidebar `<nav>`, not its `<aside>` container.
+
+### RED/GREEN and verification
+
+- RED: the new local-CSP and landmark assertions failed against the prior strict-all-environment policy and prior label placement.
+- GREEN: `PATH=/opt/homebrew/opt/php/bin:$PATH php artisan test tests/Feature/Foundation/SecurityHeadersTest.php tests/Feature/Foundation/ApplicationShellTest.php` passed (5 tests, 26 assertions).
+- Full suite: `PATH=/opt/homebrew/opt/php/bin:$PATH php artisan test` passed (20 tests, 79 assertions).
+- Build: Node `v22.22.3`; `npm run build` passed and emitted the local production assets. It retains the pre-existing Bootstrap Sass deprecation warnings.
+- `git diff --check` passed.
+
+### Scope and self-review
+
+- No production/testing CSP source, HSTS behavior, `/health`, `/ready`, or authentication/dashboard scope was weakened or changed.
+- The deferred Tailwind dependency cleanup was intentionally not touched.

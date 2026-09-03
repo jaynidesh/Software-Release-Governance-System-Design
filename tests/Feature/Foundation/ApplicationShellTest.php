@@ -16,7 +16,9 @@ final class ApplicationShellTest extends TestCase
             ->assertOk()
             ->assertSee('Release Governance')
             ->assertSee('Software Release Governance, Testing & Sign-Off')
-            ->assertSee('aria-label="Primary navigation"', escape: false)
+            ->assertSee('<nav class="navbar navbar-expand-lg bg-primary navbar-dark shadow-sm" aria-label="Application header">', escape: false)
+            ->assertSee('<aside class="app-sidebar bg-white border-end p-3">', escape: false)
+            ->assertSee('<nav aria-label="Primary navigation">', escape: false)
             ->assertSee('Skip to main content');
     }
 }
