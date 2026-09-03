@@ -48,3 +48,24 @@
 
 - No production/testing CSP source, HSTS behavior, `/health`, `/ready`, or authentication/dashboard scope was weakened or changed.
 - The deferred Tailwind dependency cleanup was intentionally not touched.
+
+## Fix round 2
+
+### Changes
+
+- Vite now reads `VITE_DEV_SERVER_ORIGIN` with `loadEnv(mode, process.cwd(), '')`, the mode-aware `.env` source used by Laravel, rather than a bare process environment variable.
+- Local CSP serialization validates the configured Vite endpoint as a single HTTP(S) origin, canonicalizes case, root paths, default ports, and WebSocket scheme, and supports valid IPv6 origins.
+- Invalid local values fail closed: the middleware returns the unchanged strict policy rather than serializing an untrusted token. Rejected inputs include credentials, non-root paths, queries, fragments, whitespace/CSP separators, unsupported schemes, and malformed values.
+
+### RED/GREEN and verification
+
+- RED: safe-origin canonicalization, malicious-origin fallback, and mode-aware Vite configuration assertions failed against the prior direct interpolation and bare `process.env` configuration.
+- GREEN: `PATH=/opt/homebrew/opt/php/bin:$PATH php artisan test tests/Feature/Foundation/SecurityHeadersTest.php tests/Feature/Foundation/ApplicationShellTest.php` passed (9 tests, 41 assertions).
+- Full suite: `PATH=/opt/homebrew/opt/php/bin:$PATH php artisan test` passed (24 tests, 94 assertions).
+- Build: Node `v22.22.3`; `npm run build` passed. Bootstrap's existing Sass deprecation warnings remain upstream.
+- `git diff --check` passed.
+
+### Scope and self-review
+
+- Production and testing CSP behavior remains strict and unchanged; no navigation or Tailwind changes were revisited.
+- The Vite configuration test verifies the mode-aware environment loader and shared key at configuration level; CSP behavior tests verify the effective PHP-side policy for safe and unsafe inputs.

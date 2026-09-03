@@ -69,4 +69,65 @@ final class SecurityHeadersTest extends TestCase
             $response->headers->get('Content-Security-Policy'),
         );
     }
+
+    public function test_local_development_canonicalizes_a_safe_custom_vite_origin(): void
+    {
+        config()->set('security.vite_dev_server_origin', 'https://Vite.Test:443/');
+        app()->instance('env', 'local');
+
+        $response = (new SecurityHeaders)->handle(
+            Request::create('/'),
+            static fn (): Response => new Response,
+        );
+
+        self::assertStringContainsString("script-src 'self' https://vite.test", (string) $response->headers->get('Content-Security-Policy'));
+        self::assertStringContainsString("connect-src 'self' https://vite.test wss://vite.test", (string) $response->headers->get('Content-Security-Policy'));
+        self::assertStringNotContainsString(':443', (string) $response->headers->get('Content-Security-Policy'));
+    }
+
+    public function test_local_development_accepts_a_valid_ipv6_vite_origin(): void
+    {
+        config()->set('security.vite_dev_server_origin', 'http://[::1]:5173');
+        app()->instance('env', 'local');
+
+        $response = (new SecurityHeaders)->handle(
+            Request::create('/'),
+            static fn (): Response => new Response,
+        );
+
+        self::assertStringContainsString("connect-src 'self' http://[::1]:5173 ws://[::1]:5173", (string) $response->headers->get('Content-Security-Policy'));
+    }
+
+    public function test_local_development_falls_back_to_the_strict_policy_for_invalid_vite_origins(): void
+    {
+        foreach ([
+            'https://user:password@vite.test:5173',
+            'http://vite.test:5173/assets',
+            'http://vite.test:5173?directive=script-src',
+            'http://vite.test:5173#fragment',
+            "http://vite.test:5173 'unsafe-inline'",
+            'ftp://vite.test:5173',
+            'not an origin',
+        ] as $origin) {
+            config()->set('security.vite_dev_server_origin', $origin);
+            app()->instance('env', 'local');
+
+            $response = (new SecurityHeaders)->handle(
+                Request::create('/'),
+                static fn (): Response => new Response,
+            );
+
+            self::assertSame(config('security.content_security_policy'), $response->headers->get('Content-Security-Policy'), $origin);
+        }
+    }
+
+    public function test_vite_configuration_uses_mode_aware_environment_loading_for_the_shared_origin(): void
+    {
+        $configuration = file_get_contents(base_path('vite.config.js'));
+
+        self::assertIsString($configuration);
+        self::assertStringContainsString("loadEnv(mode, process.cwd(), '')", $configuration);
+        self::assertStringContainsString('viteEnvironment.VITE_DEV_SERVER_ORIGIN', $configuration);
+        self::assertStringNotContainsString('process.env.VITE_DEV_SERVER_ORIGIN', $configuration);
+    }
 }
