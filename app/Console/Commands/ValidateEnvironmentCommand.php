@@ -11,6 +11,7 @@ use Illuminate\Console\Command;
 final class ValidateEnvironmentCommand extends Command
 {
     protected $signature = 'environment:validate';
+
     protected $description = 'Validate deployment-critical application configuration';
 
     public function handle(EnvironmentValidator $validator): int
@@ -25,11 +26,15 @@ final class ValidateEnvironmentCommand extends Command
                 'secure_cookie' => (bool) config('session.secure'),
             ]);
         } catch (InvalidEnvironmentConfiguration $exception) {
-            foreach ($exception->errors as $error) $this->error($error);
+            foreach ($exception->errors as $error) {
+                $this->error($error);
+            }
+
             return self::FAILURE;
         }
 
         $this->info('Environment configuration is valid.');
+
         return self::SUCCESS;
     }
 }

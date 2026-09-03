@@ -1,0 +1,61 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: sbmtag_test
+          MYSQL_USER: sbmtag_test
+          MYSQL_PASSWORD: test-secret
+          MYSQL_ROOT_PASSWORD: root-test-secret
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=10s --health-timeout=5s --health-retries=10
+    env:
+      APP_ENV: testing
+      APP_KEY: base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      APP_DEBUG: 'false'
+      APP_URL: http://localhost
+      APP_TIMEZONE: UTC
+      DB_CONNECTION: mysql
+      DB_HOST: 127.0.0.1
+      DB_PORT: 3306
+      DB_DATABASE: sbmtag_test
+      DB_USERNAME: sbmtag_test
+      DB_PASSWORD: test-secret
+      SESSION_DRIVER: database
+      SESSION_ENCRYPT: 'true'
+      SESSION_SECURE_COOKIE: 'false'
+      SESSION_HTTP_ONLY: 'true'
+      SESSION_SAME_SITE: lax
+      QUEUE_CONNECTION: database
+      CACHE_STORE: database
+      MAIL_MAILER: array
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.5'
+          extensions: mbstring, pdo_mysql, openssl
+          coverage: none
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: composer install --no-interaction --prefer-dist
+      - run: npm ci
+      - run: composer validate --strict
+      - run: composer audit --locked
+      - run: npm audit --audit-level=high
+      - run: vendor/bin/pint --test
+      - run: vendor/bin/phpstan analyse --memory-limit=1G
+      - run: php artisan environment:validate
+      - run: php artisan migrate:fresh --force
+      - run: php artisan test
+      - run: npm run build

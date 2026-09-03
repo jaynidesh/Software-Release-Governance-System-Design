@@ -73,7 +73,7 @@ final class SecurityHeaders
 
         $port = $parts['port'] ?? null;
 
-        if ($port !== null && (! is_int($port) || $port < 1 || $port > 65535)) {
+        if ($port === 0) {
             return null;
         }
 

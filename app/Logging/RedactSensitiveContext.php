@@ -15,7 +15,10 @@ final class RedactSensitiveContext
         return $record->with(context: $this->redact($record->context), extra: $this->redact($record->extra));
     }
 
-    /** @param array<array-key, mixed> $values @return array<array-key, mixed> */
+    /**
+     * @param  array<array-key, mixed>  $values
+     * @return array<array-key, mixed>
+     */
     private function redact(array $values): array
     {
         foreach ($values as $key => $value) {

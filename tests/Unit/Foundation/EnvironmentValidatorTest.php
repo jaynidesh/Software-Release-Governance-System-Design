@@ -12,7 +12,7 @@ final class EnvironmentValidatorTest extends TestCase
 {
     public function test_secure_production_settings_are_accepted(): void
     {
-        (new EnvironmentValidator())->validate($this->secureSettings());
+        (new EnvironmentValidator)->validate($this->secureSettings());
         self::assertTrue(true);
     }
 
@@ -26,7 +26,7 @@ final class EnvironmentValidatorTest extends TestCase
         ]);
 
         try {
-            (new EnvironmentValidator())->validate($settings);
+            (new EnvironmentValidator)->validate($settings);
             self::fail('Expected invalid configuration.');
         } catch (InvalidEnvironmentConfiguration $exception) {
             self::assertSame([
