@@ -1,6 +1,6 @@
 # Production Foundation
 
-This runbook covers the deployment controls available in Phase 1. The release-governance workflows, authentication, authorization, audit records, and evidence handling described in the approved architecture are Phase 2 work.
+This runbook covers the deployment controls available in Phase 1. The approved delivery plan assigns identity and application-scoped RBAC to Phase 2, application and governance configuration to Phases 3–4, audit and evidence to Phase 5, approvals to Phase 6, and the remaining release, testing, defect, production-lifecycle, notification, reporting, and hardening capabilities to later phases.
 
 ## Platform prerequisites
 
@@ -88,7 +88,7 @@ Do not promote an artifact with a high-or-critical npm finding or a Composer sec
    php artisan environment:validate
    ```
 
-   Validation must report `Environment configuration is valid.` It checks required security settings; it does not prove that MySQL is reachable.
+   Validation must report `Environment configuration is valid.` The command verifies only that `APP_KEY` is set, the timezone is UTC, MySQL is selected, the database name and username are non-empty, and production disables debug mode, uses an HTTPS application URL, and enables secure cookies. It does not connect to MySQL or verify the active database identity, effective grants, TLS or CA validation, session encryption, the HttpOnly flag, session driver, cache, queue, or logging configuration. Verify those controls separately through deployment configuration and operational checks.
 
 3. Run migrations as a separately authorized one-off job. Never run the development seeder in production.
 
@@ -96,7 +96,7 @@ Do not promote an artifact with a high-or-critical npm finding or a Composer sec
    php artisan migrate --force
    ```
 
-4. Restore the least-privilege runtime database identity, revalidate it, and build runtime caches.
+4. Restore the least-privilege runtime database credentials, rerun the application configuration validator, independently verify the active database identity and effective grants, and build runtime caches.
 
    ```bash
    php artisan environment:validate
@@ -104,6 +104,8 @@ Do not promote an artifact with a high-or-critical npm finding or a Composer sec
    php artisan route:cache
    php artisan view:cache
    ```
+
+   A passing validator confirms only that the configured database username is non-empty; it does not authenticate that identity or inspect its grants.
 
 5. Restart supervised web processes and queue workers on the new revision. A typical worker command is:
 

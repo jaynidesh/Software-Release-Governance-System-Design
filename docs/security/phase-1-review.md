@@ -12,7 +12,7 @@
 |---|---|---|
 | Secrets committed | Runtime `.env` files are ignored; checked-in examples contain names and local/test-only defaults | `git ls-files '*env*'`; `git check-ignore .env .env.testing` |
 | Unsupported runtime | Composer locks PHP 8.5/Laravel 13 and CI selects PHP 8.5, Node 22, and MySQL 8.4 | `RuntimeRequirementsTest`; `composer validate --strict`; `.github/workflows/ci.yml` |
-| Debug or configuration disclosure | Deployment validator rejects missing keys, non-UTC/non-MySQL settings, and insecure production debug, URL, or cookie settings | `EnvironmentValidatorTest`; `ProductionConfigurationTest`; `php artisan environment:validate` |
+| Debug or configuration disclosure | Deployment validator rejects an empty application key, database name, or database username; non-UTC/non-MySQL settings; and insecure production debug, URL, or secure-cookie settings | `EnvironmentValidatorTest`; `ProductionConfigurationTest`; `php artisan environment:validate` |
 | Unexpected error disclosure | Debug-disabled errors are sanitized and responses carry a server-generated correlation ID | `ErrorHandlingTest`; `AssignCorrelationId`; `bootstrap/app.php` |
 | Database mismatch or hidden migration drift | Runtime validation requires MySQL; CI and integration tests use MySQL; migrations declare UTC microsecond date-time columns | `MySqlConnectionTest`; `TimestampContractTest`; CI migration gate |
 | Dependency unavailable | Separate liveness and database-readiness endpoints expose only stable status values | `HealthEndpointTest`; `/health`; `/ready` |
@@ -41,10 +41,10 @@ npm run build
 
 The MySQL migration and test commands must target the dedicated test database. `migrate:fresh` is destructive. Registry-backed audits require network access and are repeated by CI.
 
-## Residual risks and Phase 2 gates
+## Residual risks and post-foundation gates
 
-- Authentication, application-scoped RBAC, MFA enrollment, account lockout, privileged reauthentication, and authorization policies are not implemented. No protected business route may be introduced until those controls exist and are tested.
-- Release, test, defect, sign-off, deployment, evidence, notification, and audit records are not implemented. Consequently, seven-year retention, append-only history, maker-checker enforcement, WORM export, attachment scanning, and authorized downloads remain Phase 2 controls.
+- Authentication, application-scoped RBAC, MFA enrollment, account lockout, privileged reauthentication, and authorization policies are not implemented; these are Phase 2. No protected business route may be introduced until those controls exist and are tested.
+- The approved plan schedules audit, evidence, and outbox records for Phase 5; maker-checker and approvals for Phase 6; release records for Phase 7; testing and defects for Phases 9–10; Dev, UAT, and production governance for Phases 11–12; and notifications for Phase 13. Consequently, seven-year retention, append-only history, maker-checker enforcement, WORM export, attachment scanning, authorized downloads, and the remaining business records are later post-foundation controls, not Phase 2 controls.
 - Database least privilege and TLS are deployment-platform responsibilities in Phase 1. Effective grants and CA validation require environment-specific operational evidence.
 - Redaction unit coverage proves recursive sensitive-key handling, while an end-to-end assertion of emitted stderr JSON across both context and extra data remains a test-hardening opportunity.
 - Tailwind build packages remain locked although the application shell uses Bootstrap. They are audited in CI but should be removed in a focused dependency-cleanup change to reduce unused supply-chain surface.
@@ -53,4 +53,4 @@ The MySQL migration and test commands must target the dedicated test database. `
 
 ## Phase 1 decision
 
-The foundation is suitable for continued development and controlled non-business deployment when the [production runbook](../runbooks/production-foundation.md) is followed. It is not approved to store or govern real release-management data until the Phase 2 controls above are implemented and reviewed.
+The foundation is suitable for continued development and controlled non-business deployment when the [production runbook](../runbooks/production-foundation.md) is followed. It is not approved to store or govern real release-management data until Phase 2 identity and RBAC and the relevant later-phase business, evidence, approval, and audit controls are implemented and reviewed.

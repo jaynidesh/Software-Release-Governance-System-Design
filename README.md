@@ -2,7 +2,7 @@
 
 This repository contains the Laravel 13 modular-monolith foundation for the Software Release Governance System. Phase 1 establishes the supported runtime, MySQL-backed health and test paths, deployment validation, safe error handling, structured redacted logs, security headers, and a server-rendered Bootstrap shell.
 
-Release workflows, authentication, application-scoped authorization, testing governance, defects, sign-offs, deployment records, evidence, and audit history remain Phase 2 work. The current shell must not be treated as a production-ready business system.
+Identity and application-scoped RBAC are Phase 2. The approved delivery plan assigns application configuration, versioned governance, audit and evidence, approvals, release records, testing, defects, production lifecycle, notifications, reporting, and final hardening to later post-foundation phases 3–15. The current shell must not be treated as a production-ready business system.
 
 ## Technical baseline
 
