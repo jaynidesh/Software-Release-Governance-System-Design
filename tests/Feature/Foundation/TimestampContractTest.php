@@ -15,9 +15,10 @@ final class TimestampContractTest extends TestCase
 
         self::assertStringContainsString("\$table->dateTime('email_verified_at', 6)->nullable();", $usersMigration);
         self::assertStringContainsString("\$table->dateTime('created_at', 6);", $usersMigration);
+        self::assertStringContainsString("\$table->dateTime('updated_at', 6);", $usersMigration);
         self::assertStringContainsString("\$table->dateTime('created_at', 6)->nullable();", $usersMigration);
         self::assertStringContainsString("\$table->dateTime('failed_at', 6)->useCurrent();", $jobsMigration);
-        self::assertStringNotContainsString('\$table->timestamp(', $usersMigration);
-        self::assertStringNotContainsString('\$table->timestamps()', $usersMigration);
+        self::assertStringNotContainsString('$table->timestamp(', $usersMigration);
+        self::assertStringNotContainsString('$table->timestamps()', $usersMigration);
     }
 }

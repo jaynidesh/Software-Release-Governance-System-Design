@@ -5,8 +5,9 @@ declare(strict_types=1);
 namespace App\Logging;
 
 use Monolog\LogRecord;
+use Monolog\Processor\ProcessorInterface;
 
-final class RedactSensitiveContext
+final class RedactSensitiveContext implements ProcessorInterface
 {
     private const SENSITIVE_PARTS = ['authorization', 'cookie', 'password', 'secret', 'token', 'api_key', 'private_key'];
 

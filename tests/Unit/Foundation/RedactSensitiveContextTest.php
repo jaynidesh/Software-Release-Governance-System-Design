@@ -14,10 +14,20 @@ final class RedactSensitiveContextTest extends TestCase
 {
     public function test_sensitive_keys_are_redacted_at_every_depth(): void
     {
-        $record = new LogRecord(new DateTimeImmutable, 'test', Level::Info, 'request', [
-            'email' => 'user@example.test', 'password' => 'secret',
-            'headers' => ['Authorization' => 'Bearer secret', 'accept' => 'application/json'], 'smtp_token' => 'secret',
-        ]);
+        $record = new LogRecord(
+            new DateTimeImmutable,
+            'test',
+            Level::Info,
+            'request',
+            [
+                'email' => 'user@example.test', 'password' => 'secret',
+                'headers' => ['Authorization' => 'Bearer secret', 'accept' => 'application/json'], 'smtp_token' => 'secret',
+            ],
+            [
+                'transport' => ['private_key' => 'secret', 'attempt' => 2],
+                'region' => 'mu',
+            ],
+        );
         $redacted = (new RedactSensitiveContext)($record);
 
         self::assertSame('user@example.test', $redacted->context['email']);
@@ -25,5 +35,8 @@ final class RedactSensitiveContextTest extends TestCase
         self::assertSame('[REDACTED]', $redacted->context['headers']['Authorization']);
         self::assertSame('application/json', $redacted->context['headers']['accept']);
         self::assertSame('[REDACTED]', $redacted->context['smtp_token']);
+        self::assertSame('[REDACTED]', $redacted->extra['transport']['private_key']);
+        self::assertSame(2, $redacted->extra['transport']['attempt']);
+        self::assertSame('mu', $redacted->extra['region']);
     }
 }

@@ -7,5 +7,9 @@ use Illuminate\Support\Facades\Route;
 
 Route::get('/', WelcomeController::class)->name('home');
 
-Route::get('/health', LivenessController::class)->name('health');
-Route::get('/ready', ReadinessController::class)->name('ready');
+Route::get('/health', LivenessController::class)
+    ->withoutMiddleware('web')
+    ->name('health');
+Route::get('/ready', ReadinessController::class)
+    ->withoutMiddleware('web')
+    ->name('ready');

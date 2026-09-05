@@ -1,5 +1,6 @@
 <?php
 
+use App\Logging\RedactSensitiveContext;
 use App\Logging\UseJsonFormatter;
 use Monolog\Handler\NullHandler;
 use Monolog\Handler\StreamHandler;
@@ -112,7 +113,7 @@ return [
                 'stream' => 'php://stderr',
             ],
             'formatter' => env('LOG_STDERR_FORMATTER'),
-            'processors' => [PsrLogMessageProcessor::class],
+            'processors' => [RedactSensitiveContext::class, PsrLogMessageProcessor::class],
         ],
 
         'syslog' => [
