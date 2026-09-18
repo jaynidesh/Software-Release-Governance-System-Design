@@ -38,7 +38,7 @@ final class EnvironmentValidatorTest extends TestCase
         }
     }
 
-    /** @return array<string, bool|string> */
+    /** @return array<string, bool|int|string|list<string>> */
     private function secureSettings(): array
     {
         return [
@@ -46,6 +46,26 @@ final class EnvironmentValidatorTest extends TestCase
             'url' => 'https://release.example.test', 'timezone' => 'UTC',
             'database_connection' => 'mysql', 'database_name' => 'sbmtag',
             'database_username' => 'sbmtag_app', 'secure_cookie' => true,
+            'auth_provider' => 'email_otp', 'otp_channel' => 'mail',
+            'otp_pepper' => str_repeat('p', 32), 'otp_digits' => 6,
+            'otp_ttl_minutes' => 10, 'otp_max_attempts' => 5,
+            'otp_request_limit' => 3, 'otp_ip_request_limit' => 30,
+            'otp_request_window_minutes' => 15, 'otp_resend_seconds' => 60,
+            'challenge_retention_hours' => 24, 'invitation_ttl_days' => 7,
+            'lockout_attempts' => 5, 'lockout_window_minutes' => 15, 'lockout_minutes' => 30,
+            'session_driver' => 'database', 'session_encrypt' => true,
+            'session_lifetime' => 15, 'session_inactivity_minutes' => 15,
+            'session_absolute_minutes' => 480, 'privileged_reauth_minutes' => 10,
+            'totp_issuer' => 'Release Governance', 'totp_window' => 1,
+            'totp_recovery_code_count' => 10, 'totp_recovery_code_length' => 12,
+            'unconfirmed_mfa_ttl_minutes' => 30, 'pending_auth_ttl_minutes' => 10,
+            'privileged_permissions' => [
+                'admin.', 'production.approve', 'signoff.production', 'maker_checker.override.approve',
+            ],
+            'additional_privileged_permissions' => [],
+            'known_permissions' => ['admin.users'],
+            'queue_connection' => 'database', 'security_queue' => 'security',
+            'event_retention_days' => 2555,
         ];
     }
 }
