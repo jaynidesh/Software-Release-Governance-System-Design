@@ -3,6 +3,11 @@
         <a class="navbar-brand fw-semibold" href="{{ route('home') }}">
             <i class="bi bi-diagram-3 me-2" aria-hidden="true"></i>Release Governance
         </a>
-        <span class="navbar-text text-white-50">Controlled delivery from Development to Production</span>
+        <div class="d-flex align-items-center gap-3">
+            <span class="navbar-text text-white-50">Controlled delivery from Development to Production</span>
+            @auth
+                <span class="navbar-text text-white">{{ auth()->user()->name }}</span>
+            @endauth
+        </div>
     </div>
 </nav>

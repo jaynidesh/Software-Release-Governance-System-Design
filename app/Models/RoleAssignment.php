@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Models;
 
 use App\Models\Concerns\HasPublicUlid;
+use App\Support\Exceptions\DomainRuleViolation;
 use Database\Factories\RoleAssignmentFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -20,6 +21,27 @@ class RoleAssignment extends Model
     /** @use HasFactory<RoleAssignmentFactory> */
     use HasFactory, HasPublicUlid;
 
+    protected static function booted(): void
+    {
+        static::saving(static function (RoleAssignment $assignment): void {
+            if (! $assignment->beginsActiveScopedGrant()) {
+                return;
+            }
+
+            $applicationIsActive = Application::query()
+                ->whereKey($assignment->application_id)
+                ->where('is_active', true)
+                ->exists();
+
+            if (! $applicationIsActive) {
+                throw new DomainRuleViolation(
+                    'inactive_application_assignment',
+                    ['Activate the application before assigning a scoped role.'],
+                );
+            }
+        });
+    }
+
     protected function casts(): array
     {
         return [
@@ -27,6 +49,17 @@ class RoleAssignment extends Model
             'ends_at' => 'datetime',
             'revoked_at' => 'datetime',
         ];
+    }
+
+    private function beginsActiveScopedGrant(): bool
+    {
+        if ($this->application_id === null || $this->revoked_at !== null) {
+            return false;
+        }
+
+        return ! $this->exists
+            || $this->isDirty('application_id')
+            || ($this->isDirty('revoked_at') && $this->getOriginal('revoked_at') !== null);
     }
 
     /** @return BelongsTo<User, $this> */

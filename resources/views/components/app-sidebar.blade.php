@@ -6,9 +6,13 @@
                     <i class="bi bi-house-door me-2" aria-hidden="true"></i>Home
                 </a>
             </li>
-            <li class="nav-item">
-                <span class="nav-link disabled" aria-disabled="true">Sign in available in Phase 2</span>
-            </li>
+            @can('admin.applications')
+                <li class="nav-item">
+                    <a class="nav-link" href="{{ route('admin.applications.index') }}">
+                        <i class="bi bi-grid me-2" aria-hidden="true"></i>Applications
+                    </a>
+                </li>
+            @endcan
         </ul>
     </nav>
 </aside>
