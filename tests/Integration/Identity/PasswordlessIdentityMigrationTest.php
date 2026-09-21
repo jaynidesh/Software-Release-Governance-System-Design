@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Tests\Feature\Identity;
+namespace Tests\Integration\Identity;
 
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;

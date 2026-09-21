@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace Database\Factories;
 
 use App\Domain\Identity\Enums\MfaMethodType;
+use App\Domain\Identity\Enums\PermissionScope;
 use App\Domain\Identity\Enums\UserState;
+use App\Models\Permission;
 use App\Models\Role;
 use App\Models\RoleAssignment;
 use App\Models\User;
@@ -73,10 +75,21 @@ class UserFactory extends Factory
     public function privileged(): static
     {
         return $this->active()->afterCreating(function (User $user): void {
-            $role = Role::query()->firstOrCreate(
+            $role = Role::query()->updateOrCreate(
                 ['code' => 'administrator'],
-                ['name' => 'Administrator', 'is_system' => true, 'is_active' => true],
+                [
+                    'name' => 'Administrator',
+                    'description' => 'System role for Administrator responsibilities.',
+                    'is_system' => true,
+                    'is_active' => true,
+                ],
             );
+            $permission = Permission::query()->updateOrCreate(
+                ['code' => 'admin.users'],
+                ['description' => 'Admin Users.', 'scope_type' => PermissionScope::Global],
+            );
+
+            $role->permissions()->syncWithoutDetaching([$permission->getKey()]);
 
             RoleAssignment::query()->firstOrCreate([
                 'user_id' => $user->id,

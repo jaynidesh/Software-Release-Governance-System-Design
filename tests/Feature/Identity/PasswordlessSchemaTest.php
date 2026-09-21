@@ -62,6 +62,33 @@ final class PasswordlessSchemaTest extends TestCase
         self::assertTrue($locked->locked_until->isFuture());
     }
 
+    public function test_privileged_factory_persists_a_global_assignment_with_a_canonical_privileged_permission(): void
+    {
+        $user = User::factory()->privileged()->create();
+        $assignment = $user->roleAssignments()->with('role.permissions')->sole();
+        $permission = $assignment->role->permissions->firstWhere('code', 'admin.users');
+
+        self::assertNull($assignment->application_id);
+        self::assertTrue($assignment->role->is_system);
+        self::assertTrue($assignment->role->is_active);
+        self::assertNotNull($permission);
+        self::assertSame(PermissionScope::Global, $permission->scope_type);
+    }
+
+    public function test_privileged_factory_preserves_the_seeded_administrator_permission_bundle(): void
+    {
+        $this->seed();
+        $administrator = Role::query()->where('code', 'administrator')->firstOrFail();
+        $permissionsBefore = $administrator->permissions()->orderBy('code')->pluck('code')->all();
+
+        User::factory()->privileged()->create();
+
+        self::assertSame(
+            $permissionsBefore,
+            $administrator->permissions()->orderBy('code')->pluck('code')->all(),
+        );
+    }
+
     public function test_authorization_models_have_typed_relationships_and_public_route_keys(): void
     {
         $user = User::factory()->active()->create();

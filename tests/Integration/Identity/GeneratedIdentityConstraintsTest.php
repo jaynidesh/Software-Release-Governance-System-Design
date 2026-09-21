@@ -115,6 +115,14 @@ final class GeneratedIdentityConstraintsTest extends TestCase
         Application::factory()->create(['code' => 'release-portal']);
     }
 
+    public function test_normalized_role_code_uniqueness_is_race_safe(): void
+    {
+        Role::factory()->create(['code' => ' RELEASE-MANAGER ']);
+
+        $this->expectException(QueryException::class);
+        Role::factory()->create(['code' => 'release-manager']);
+    }
+
     private function createChallenge(User $user): AuthChallenge
     {
         return AuthChallenge::create([
