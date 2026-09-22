@@ -21,24 +21,31 @@ class RoleAssignment extends Model
     /** @use HasFactory<RoleAssignmentFactory> */
     use HasFactory, HasPublicUlid;
 
-    protected static function booted(): void
+    /**
+     * Persist grant-starting transitions while holding the target application's row lock.
+     *
+     * @param  array<string, mixed>  $options
+     */
+    public function save(array $options = []): bool
     {
-        static::saving(static function (RoleAssignment $assignment): void {
-            if (! $assignment->beginsActiveScopedGrant()) {
-                return;
-            }
+        if (! $this->beginsActiveScopedGrant()) {
+            return parent::save($options);
+        }
 
-            $applicationIsActive = Application::query()
-                ->whereKey($assignment->application_id)
-                ->where('is_active', true)
-                ->exists();
+        return $this->getConnection()->transaction(function () use ($options): bool {
+            $application = Application::query()
+                ->whereKey($this->application_id)
+                ->lockForUpdate()
+                ->first();
 
-            if (! $applicationIsActive) {
+            if (! $application?->is_active) {
                 throw new DomainRuleViolation(
                     'inactive_application_assignment',
                     ['Activate the application before assigning a scoped role.'],
                 );
             }
+
+            return parent::save($options);
         });
     }
 
