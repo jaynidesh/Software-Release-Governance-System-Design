@@ -7,6 +7,7 @@ namespace App\Application\Identity\Users;
 use App\Contracts\Identity\AuthorizationService;
 use App\Domain\Identity\Enums\UserState;
 use App\Models\User;
+use App\Notifications\Identity\InvitationRevokedNotification;
 use App\Services\Identity\AccountLockout;
 use App\Services\Identity\IdentityEventRecorder;
 use App\Support\Exceptions\DomainRuleViolation;
@@ -56,6 +57,7 @@ final class RevokeInvitation
                 $userAgent,
                 $correlationId,
             );
+            $lockedUser->notify(new InvitationRevokedNotification);
 
             return $lockedUser;
         }, 3);

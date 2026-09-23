@@ -6,6 +6,7 @@ namespace App\Application\Identity\Users;
 
 use App\Contracts\Identity\AuthorizationService;
 use App\Models\User;
+use App\Notifications\Identity\AccountUnlockedNotification;
 use App\Services\Identity\AccountLockout;
 use App\Services\Identity\IdentityEventRecorder;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -48,6 +49,7 @@ final class UnlockUser
                 $userAgent,
                 $correlationId,
             );
+            $lockedUser->notify(new AccountUnlockedNotification);
 
             return $lockedUser;
         }, 3);

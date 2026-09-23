@@ -13,11 +13,16 @@ use App\Domain\Identity\Enums\AuthenticationPurpose;
 use App\Domain\Identity\Enums\UserState;
 use App\Models\Application;
 use App\Models\AuthChallenge;
+use App\Models\LoginEvent;
 use App\Models\PendingAuthentication;
+use App\Models\SecurityEvent;
 use App\Models\User;
+use App\Notifications\Identity\AccountUnlockedNotification;
 use App\Notifications\Identity\ActivationInvitationNotification;
 use App\Notifications\Identity\EmailOtpNotification;
+use App\Notifications\Identity\InvitationRevokedNotification;
 use App\Services\Identity\OtpHasher;
+use Illuminate\Contracts\Bus\Dispatcher as BusDispatcher;
 use Illuminate\Contracts\Encryption\Encrypter;
 use Illuminate\Contracts\Foundation\Application as ApplicationContract;
 use Illuminate\Contracts\Queue\ShouldBeEncrypted;
@@ -29,6 +34,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Mockery;
 use Monolog\Handler\TestHandler;
 use RuntimeException;
 use Tests\TestCase;
@@ -227,6 +233,164 @@ final class AuthenticationPrivacyTest extends TestCase
             ->assertSessionHasErrors(['code' => 'The code is invalid or expired.']);
     }
 
+    public function test_malformed_otp_is_never_flashed_and_validation_response_is_not_cacheable(): void
+    {
+        $plaintext = '91827X';
+
+        $response = $this->post('/login/verify', ['code' => ' '.$plaintext.' ']);
+
+        $response->assertRedirect('/login/verify')
+            ->assertSessionHasErrors(['code' => 'The code is invalid or expired.']);
+        $oldInput = session('_old_input', []);
+        self::assertIsArray($oldInput);
+        self::assertArrayNotHasKey('code', $oldInput);
+        $response->assertHeader('Cache-Control', 'no-store, private');
+        self::assertStringNotContainsString($plaintext, json_encode(session()->all(), JSON_THROW_ON_ERROR));
+        self::assertStringNotContainsString($plaintext, (string) $response->getContent());
+        self::assertStringNotContainsString($plaintext, $this->serializedAuthenticationStorage());
+    }
+
+    public function test_eligible_enqueue_failure_keeps_generic_response_and_records_only_safe_context(): void
+    {
+        $email = 'enqueue-failure@example.test';
+        User::factory()->active()->create(['email' => $email]);
+        $capturedCode = null;
+        $bus = Mockery::mock(BusDispatcher::class);
+        $bus->shouldReceive('dispatch')->once()->andReturnUsing(
+            function (SendQueuedNotifications $job) use (&$capturedCode, $email): never {
+                self::assertInstanceOf(EmailOtpNotification::class, $job->notification);
+                $capturedCode = $job->notification->code;
+
+                throw new RuntimeException('Cannot enqueue '.$email.' with OTP '.$capturedCode);
+            },
+        );
+        $this->app->instance(BusDispatcher::class, $bus);
+        $handler = new TestHandler;
+        Log::getLogger()->pushHandler($handler);
+
+        $unknownResponse = $this->post('/login/otp', ['email' => 'unknown-enqueue@example.test']);
+        $eligibleResponse = $this->post('/login/otp', ['email' => $email]);
+
+        $unknownResponse->assertRedirect('/login/verify')
+            ->assertSessionHas('status', 'If the account is eligible, a sign-in code will be sent.');
+        $eligibleResponse->assertRedirect('/login/verify')
+            ->assertHeader('Cache-Control', 'no-store, private')
+            ->assertSessionHas('status', 'If the account is eligible, a sign-in code will be sent.');
+        self::assertSame($unknownResponse->getStatusCode(), $eligibleResponse->getStatusCode());
+        self::assertSame($unknownResponse->headers->get('Location'), $eligibleResponse->headers->get('Location'));
+        self::assertIsString($capturedCode);
+        self::assertMatchesRegularExpression('/^\d{6}$/', $capturedCode);
+        self::assertStringNotContainsString($capturedCode, json_encode(session()->all(), JSON_THROW_ON_ERROR));
+        self::assertStringNotContainsString($email, json_encode(session()->all(), JSON_THROW_ON_ERROR));
+        self::assertStringNotContainsString($email, json_encode($handler->getRecords(), JSON_THROW_ON_ERROR));
+        self::assertStringNotContainsString($capturedCode, json_encode($handler->getRecords(), JSON_THROW_ON_ERROR));
+        self::assertStringNotContainsString($capturedCode, $this->serializedAuthenticationStorage());
+        self::assertStringNotContainsString($email, $this->serializedAuthenticationStorage());
+        self::assertStringNotContainsString($capturedCode, (string) $eligibleResponse->getContent());
+        self::assertStringNotContainsString($email, (string) $eligibleResponse->getContent());
+        $challenge = AuthChallenge::query()->sole();
+        $this->assertDatabaseHas('security_events', [
+            'subject_user_id' => $challenge->user_id,
+            'event_code' => 'identity.otp.delivery_failed',
+            'correlation_id' => $challenge->correlation_id,
+        ]);
+    }
+
+    public function test_invitation_revocation_notice_is_encrypted_after_commit_and_discarded_on_rollback(): void
+    {
+        $this->allowAdministration();
+        $actor = User::factory()->active()->create();
+        $user = User::factory()->invited()->create();
+        $action = $this->app->make(RevokeInvitation::class);
+
+        DB::beginTransaction();
+        $action->handle($actor, $user, '127.0.0.1', 'Test Agent', 'corr-revoke-rollback');
+        self::assertSame(0, DB::table('jobs')->count());
+        DB::rollBack();
+        self::assertSame(0, DB::table('jobs')->count());
+
+        DB::beginTransaction();
+        $action->handle($actor, $user->refresh(), '127.0.0.1', 'Test Agent', 'corr-revoke-commit');
+        self::assertSame(0, DB::table('jobs')->count());
+        DB::commit();
+
+        $job = $this->queuedNotification();
+        self::assertSame('security', $job->queue);
+        self::assertTrue($job->shouldBeEncrypted);
+        self::assertInstanceOf(InvitationRevokedNotification::class, $job->notification);
+        $mail = $job->notification->toMail($user)->toArray();
+        self::assertStringContainsString('revoked', mb_strtolower(json_encode($mail, JSON_THROW_ON_ERROR)));
+        self::assertStringNotContainsString('token', mb_strtolower(json_encode($mail, JSON_THROW_ON_ERROR)));
+        self::assertStringNotContainsString('code', mb_strtolower(json_encode($mail, JSON_THROW_ON_ERROR)));
+    }
+
+    public function test_unlock_notice_is_encrypted_after_commit_and_discarded_on_rollback(): void
+    {
+        $this->allowAdministration();
+        $actor = User::factory()->active()->create();
+        $user = User::factory()->locked()->create();
+        $action = $this->app->make(UnlockUser::class);
+
+        DB::beginTransaction();
+        $action->handle($actor, $user, '127.0.0.1', 'Test Agent', 'corr-unlock-rollback');
+        self::assertSame(0, DB::table('jobs')->count());
+        DB::rollBack();
+        self::assertSame(0, DB::table('jobs')->count());
+
+        DB::beginTransaction();
+        $action->handle($actor, $user->refresh(), '127.0.0.1', 'Test Agent', 'corr-unlock-commit');
+        self::assertSame(0, DB::table('jobs')->count());
+        DB::commit();
+
+        $job = $this->queuedNotification();
+        self::assertSame('security', $job->queue);
+        self::assertTrue($job->shouldBeEncrypted);
+        self::assertInstanceOf(AccountUnlockedNotification::class, $job->notification);
+        $mail = $job->notification->toMail($user)->toArray();
+        self::assertStringContainsString('unlocked', mb_strtolower(json_encode($mail, JSON_THROW_ON_ERROR)));
+        self::assertStringNotContainsString('token', mb_strtolower(json_encode($mail, JSON_THROW_ON_ERROR)));
+        self::assertStringNotContainsString('code', mb_strtolower(json_encode($mail, JSON_THROW_ON_ERROR)));
+    }
+
+    public function test_valid_verification_without_session_state_records_generic_authentication_failure(): void
+    {
+        $response = $this->post('/login/verify', ['code' => '123456']);
+        $correlationId = $response->headers->get('X-Correlation-ID');
+
+        $response->assertRedirect('/login/verify')
+            ->assertHeader('Cache-Control', 'no-store, private')
+            ->assertSessionHasErrors(['code' => 'The code is invalid or expired.']);
+        self::assertIsString($correlationId);
+        $this->assertDatabaseHas('security_events', [
+            'subject_user_id' => null,
+            'event_code' => 'identity.authentication.failed',
+            'correlation_id' => $correlationId,
+        ]);
+        self::assertStringNotContainsString('123456', SecurityEvent::query()->sole()->toJson());
+    }
+
+    public function test_unresolved_challenge_records_both_generic_verification_and_authentication_failures(): void
+    {
+        $response = $this->withSession([
+            'identity.auth_challenge' => strtolower((string) Str::ulid()),
+            'identity.auth_purpose' => AuthenticationPurpose::Login->value,
+        ])->post('/login/verify', ['code' => '654321']);
+        $correlationId = $response->headers->get('X-Correlation-ID');
+
+        $response->assertRedirect('/login/verify')
+            ->assertSessionHasErrors(['code' => 'The code is invalid or expired.']);
+        self::assertIsString($correlationId);
+        self::assertSame(1, SecurityEvent::query()
+            ->where('event_code', 'identity.otp.verification_failed')
+            ->where('correlation_id', $correlationId)
+            ->count());
+        self::assertSame(1, SecurityEvent::query()
+            ->where('event_code', 'identity.authentication.failed')
+            ->where('correlation_id', $correlationId)
+            ->count());
+        self::assertStringNotContainsString('654321', SecurityEvent::query()->get()->toJson());
+    }
+
     public function test_delivery_failure_records_safe_event_and_log_context_without_the_code(): void
     {
         $user = User::factory()->active()->create();
@@ -294,5 +458,17 @@ final class AuthenticationPrivacyTest extends TestCase
         self::assertInstanceOf(SendQueuedNotifications::class, $job);
 
         return $job;
+    }
+
+    private function serializedAuthenticationStorage(): string
+    {
+        return json_encode([
+            'challenges' => AuthChallenge::query()->get()->toArray(),
+            'login_events' => LoginEvent::query()->get()->toArray(),
+            'security_events' => SecurityEvent::query()->get()->toArray(),
+            'pending_authentications' => PendingAuthentication::query()->get()->toArray(),
+            'jobs' => DB::table('jobs')->get()->toArray(),
+            'sessions' => DB::table('sessions')->get()->toArray(),
+        ], JSON_THROW_ON_ERROR);
     }
 }

@@ -17,14 +17,13 @@ use App\Policies\ApplicationPolicy;
 use App\Services\Foundation\DatabaseReadinessCheck;
 use App\Services\Identity\EloquentAuthorizationService;
 use App\Services\Identity\EmailOtpAuthenticationProvider;
-use App\Services\Identity\IdentityEventRecorder;
 use App\Services\Identity\LaravelOtpDelivery;
+use App\Services\Identity\OtpDeliveryFailureReporter;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Notifications\Events\NotificationFailed;
 use Illuminate\Pagination\Paginator;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -62,22 +61,17 @@ class AppServiceProvider extends ServiceProvider
                 return;
             }
 
+            if ($challenge->user_id !== $event->notifiable->getKey()) {
+                return;
+            }
+
             $exception = $event->data['exception'] ?? null;
-            $this->app->make(IdentityEventRecorder::class)->security(
-                'identity.otp.delivery_failed',
-                null,
+            $this->app->make(OtpDeliveryFailureReporter::class)->report(
                 $event->notifiable,
-                ['challenge_reference' => $challenge->public_id, 'channel' => $event->channel],
-                $challenge->request_ip,
-                $challenge->user_agent,
-                $challenge->correlation_id,
+                $challenge,
+                $event->channel,
+                $exception instanceof \Throwable ? $exception : null,
             );
-            Log::error('OTP delivery failed.', [
-                'challenge_id' => $challenge->public_id,
-                'correlation_id' => $challenge->correlation_id,
-                'channel' => $event->channel,
-                'exception_type' => is_object($exception) ? $exception::class : null,
-            ]);
         });
 
         $app = $this->app;

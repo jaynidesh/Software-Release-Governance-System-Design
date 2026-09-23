@@ -184,6 +184,15 @@ final class EmailOtpAuthenticationProvider implements PrimaryAuthenticationProvi
                 $userAgent,
                 $correlationId,
             );
+            $this->events->security(
+                'identity.authentication.failed',
+                null,
+                null,
+                ['purpose' => $purpose->value],
+                $ipAddress,
+                $userAgent,
+                $correlationId,
+            );
 
             $this->rejectCode();
         }

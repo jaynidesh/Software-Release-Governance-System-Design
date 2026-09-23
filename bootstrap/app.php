@@ -23,6 +23,14 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withExceptions(function (Exceptions $exceptions): void {
         $shouldRenderJson = static fn (Request $request): bool => $request->is('api/*') || $request->expectsJson();
 
+        $exceptions->dontFlash([
+            'otp',
+            'code',
+            'totp',
+            'recovery_code',
+            'mfa_secret',
+        ]);
+
         $exceptions->shouldRenderJsonWhen(
             $shouldRenderJson,
         );
@@ -41,10 +49,15 @@ return Application::configure(basePath: dirname(__DIR__))
         });
 
         $exceptions->respond(function (Response $response): Response {
-            $id = request()->attributes->get('correlation_id');
+            $request = request();
+            $id = $request->attributes->get('correlation_id');
 
             if (is_string($id)) {
                 $response->headers->set('X-Correlation-ID', $id);
+            }
+
+            if ($request->is('login') || $request->is('login/*')) {
+                $response->headers->set('Cache-Control', 'no-store, private');
             }
 
             return $response;
