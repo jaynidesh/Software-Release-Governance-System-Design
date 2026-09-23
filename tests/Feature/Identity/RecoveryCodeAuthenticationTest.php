@@ -5,6 +5,10 @@ declare(strict_types=1);
 namespace Tests\Feature\Identity;
 
 use App\Application\Identity\Mfa\VerifyPendingMfa;
+use App\Contracts\Identity\PrimaryAuthenticationProvider;
+use App\Contracts\Identity\TotpVerifier;
+use App\Domain\Identity\Enums\AuthenticationPurpose;
+use App\Domain\Identity\Enums\UserState;
 use App\Models\AuthChallenge;
 use App\Models\PendingAuthentication;
 use App\Models\User;
@@ -112,7 +116,129 @@ final class RecoveryCodeAuthenticationTest extends TestCase
 
         self::assertNotNull($user->refresh()->locked_until);
         self::assertNotNull(PendingAuthentication::query()->sole()->invalidated_at);
+        $this->assertDatabaseHas('security_events', [
+            'subject_user_id' => $user->id,
+            'event_code' => 'identity.authentication.failed',
+        ]);
         $this->assertGuest();
+    }
+
+    public function test_future_skew_step_prevents_later_current_step_acceptance(): void
+    {
+        $user = User::factory()->privileged()->mfaConfirmed()->create();
+        $this->app->instance(TotpVerifier::class, new class implements TotpVerifier
+        {
+            public function generateSecret(): string
+            {
+                return 'unused';
+            }
+
+            public function provisioningUri(string $secret, string $accountName): string
+            {
+                return 'otpauth://unused';
+            }
+
+            public function verify(string $secret, string $code, ?int $timestamp = null): ?int
+            {
+                return match ($code) {
+                    '111111' => 101,
+                    '222222' => 100,
+                    default => null,
+                };
+            }
+        });
+        $this->beginPending($user);
+
+        $this->post('/login/mfa', ['code' => '111111'])->assertRedirect('/');
+
+        $this->logOutBrowser();
+        $this->beginPending($user);
+        $this->post('/login/mfa', ['code' => '222222'])
+            ->assertRedirect('/login/mfa')
+            ->assertSessionHasErrors('code');
+        $this->assertGuest();
+    }
+
+    public function test_reauthentication_retains_mfa_after_business_privilege_is_removed(): void
+    {
+        $user = User::factory()->active()->mfaConfirmed()->create();
+        $provider = $this->app->make(PrimaryAuthenticationProvider::class);
+        $begin = $provider->begin(
+            $user->email,
+            AuthenticationPurpose::Reauthentication,
+            '127.0.0.1',
+            'Test',
+            'reauth-correlation',
+        );
+        $challenge = AuthChallenge::query()->where('public_id', $begin->challengeReference)->sole();
+        $challenge->update(['delivered_at' => now()]);
+
+        $completed = $provider->verify(
+            $challenge->public_id,
+            $this->queuedOtpCode(),
+            AuthenticationPurpose::Reauthentication,
+            '127.0.0.1',
+            'Test',
+            'reauth-correlation',
+        );
+
+        self::assertTrue($completed->requiresAdditionalProof());
+        self::assertNotNull($completed->pendingAuthentication);
+        $this->withCookie((string) config('session.cookie'), $this->sessionStore()->getId());
+        $this->get('/login/mfa')->assertOk();
+        $this->post('/login/mfa', [
+            'code' => TOTP::createFromSecret($user->mfaMethods()->sole()->secret)->now(),
+        ])->assertRedirect('/');
+        $this->assertAuthenticatedAs($user);
+    }
+
+    public function test_login_does_not_require_retained_mfa_after_business_privilege_is_removed(): void
+    {
+        $user = User::factory()->active()->mfaConfirmed()->create();
+        $provider = $this->app->make(PrimaryAuthenticationProvider::class);
+        $begin = $provider->begin(
+            $user->email,
+            AuthenticationPurpose::Login,
+            '127.0.0.1',
+            'Test',
+            'login-correlation',
+        );
+        $challenge = AuthChallenge::query()->where('public_id', $begin->challengeReference)->sole();
+        $challenge->update(['delivered_at' => now()]);
+
+        $completed = $provider->verify(
+            $challenge->public_id,
+            $this->queuedOtpCode(),
+            AuthenticationPurpose::Login,
+            '127.0.0.1',
+            'Test',
+            'login-correlation',
+        );
+
+        self::assertFalse($completed->requiresAdditionalProof());
+        self::assertNull($completed->pendingAuthentication);
+        $this->assertAuthenticatedAs($user);
+    }
+
+    public function test_confirmed_method_activation_emits_invitation_activation_event(): void
+    {
+        $user = User::factory()->invited()->privileged()->mfaConfirmed()->create([
+            'state' => UserState::Invited,
+            'activated_at' => null,
+            'email_verified_at' => null,
+            'invitation_expires_at' => now()->addDay(),
+        ]);
+        $method = $user->mfaMethods()->sole();
+        $this->beginPending($user);
+
+        $this->post('/login/mfa', [
+            'code' => TOTP::createFromSecret($method->secret)->now(),
+        ])->assertRedirect('/');
+
+        $this->assertDatabaseHas('security_events', [
+            'subject_user_id' => $user->id,
+            'event_code' => 'identity.invitation.activated',
+        ]);
     }
 
     private function beginPending(User $user): PendingAuthentication

@@ -4,8 +4,13 @@ declare(strict_types=1);
 
 namespace App\Services\Identity;
 
+use App\Domain\Identity\Enums\AuthenticationPurpose;
+use App\Domain\Identity\Enums\MfaMethodType;
+use App\Domain\Identity\Enums\PermissionScope;
+use App\Models\Application;
 use App\Models\Permission;
 use App\Models\User;
+use App\Models\UserMfaMethod;
 
 final class PrivilegedPermissionResolver
 {
@@ -47,11 +52,43 @@ final class PrivilegedPermissionResolver
                     ->orWhere('role_assignments.ends_at', '>', now());
             })
             ->where(static function ($query): void {
-                $query->whereNull('role_assignments.application_id')
-                    ->orWhere('applications.is_active', true);
+                $query->where(static function ($global): void {
+                    $global->where('permissions.scope_type', PermissionScope::Global)
+                        ->whereNull('role_assignments.application_id');
+                })->orWhere(static function ($application): void {
+                    $application->where('permissions.scope_type', PermissionScope::Application)
+                        ->where(static function ($assignment): void {
+                            $assignment->where(static function ($scoped): void {
+                                $scoped->whereNotNull('role_assignments.application_id')
+                                    ->where('applications.is_active', true);
+                            })->orWhere(static function ($global): void {
+                                $global->whereNull('role_assignments.application_id')
+                                    ->whereExists(static function ($activeApplications): void {
+                                        $activeApplications->selectRaw('1')
+                                            ->from((new Application)->getTable().' as active_applications')
+                                            ->where('active_applications.is_active', true);
+                                    });
+                            });
+                        });
+                });
             })
             ->pluck('permissions.code')
             ->contains(fn (mixed $code): bool => is_string($code) && $this->isPrivileged($code));
+    }
+
+    public function authenticationRequiresMfa(User $user, AuthenticationPurpose $purpose): bool
+    {
+        if ($this->userIsPrivileged($user)) {
+            return true;
+        }
+
+        return $purpose === AuthenticationPurpose::Reauthentication
+            && UserMfaMethod::query()
+                ->where('user_id', $user->getKey())
+                ->where('type', MfaMethodType::Totp)
+                ->whereNotNull('confirmed_at')
+                ->whereNull('disabled_at')
+                ->exists();
     }
 
     /** @return list<string> */

@@ -29,16 +29,30 @@ final class ResetUserMfa
         ?string $userAgent,
         ?string $correlationId,
     ): void {
-        if ($actor->is($target)) {
-            throw new DomainRuleViolation('self_mfa_reset', ['A different administrator must reset multi-factor authentication.']);
-        }
-
-        if (! $this->authorization->allows($actor, 'admin.users', null, true)) {
-            throw new DomainRuleViolation('unauthorized_mfa_reset', ['Fresh administrator authentication is required.']);
-        }
-
         DB::transaction(function () use ($actor, $target, $ipAddress, $userAgent, $correlationId): void {
-            $lockedTarget = User::query()->whereKey($target->id)->lockForUpdate()->firstOrFail();
+            $ids = [(int) $actor->getKey(), (int) $target->getKey()];
+            sort($ids);
+            $lockedUsers = User::query()
+                ->whereKey($ids)
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get()
+                ->keyBy('id');
+            $lockedActor = $lockedUsers->get($actor->getKey());
+            $lockedTarget = $lockedUsers->get($target->getKey());
+
+            if (! $lockedActor instanceof User || ! $lockedTarget instanceof User) {
+                throw new DomainRuleViolation('invalid_mfa_reset_target', ['The multi-factor reset target is unavailable.']);
+            }
+
+            if ($lockedActor->is($lockedTarget)) {
+                throw new DomainRuleViolation('self_mfa_reset', ['A different administrator must reset multi-factor authentication.']);
+            }
+
+            if (! $this->authorization->allows($lockedActor, 'admin.users', null, true)) {
+                throw new DomainRuleViolation('unauthorized_mfa_reset', ['Fresh administrator authentication is required.']);
+            }
+
             $methods = UserMfaMethod::query()->where('user_id', $lockedTarget->id)->lockForUpdate()->get();
 
             foreach ($methods as $method) {
@@ -63,7 +77,7 @@ final class ResetUserMfa
             $lockedTarget->increment('session_version');
             $this->events->security(
                 'identity.mfa.reset',
-                $actor,
+                $lockedActor,
                 $lockedTarget,
                 [],
                 $ipAddress,

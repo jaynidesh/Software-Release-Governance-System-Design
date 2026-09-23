@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Feature\Identity;
 
 use App\Application\Identity\Mfa\BeginTotpEnrollment;
+use App\Application\Identity\Mfa\ConfirmTotpEnrollment;
 use App\Domain\Identity\Enums\AuthenticationPurpose;
 use App\Domain\Identity\Enums\UserState;
 use App\Models\AuthChallenge;
@@ -95,6 +96,69 @@ final class TotpEnrollmentTest extends TestCase
         $response->assertDontSee($oldSecret);
     }
 
+    public function test_expired_confirmed_setup_is_purged_before_recovery_acknowledgment(): void
+    {
+        config()->set('identity.totp.unconfirmed_ttl_minutes', 5);
+        $user = User::factory()->privileged()->create();
+        $this->pendingFor($user);
+        $this->get('/login/mfa/enroll');
+        $method = UserMfaMethod::query()->sole();
+        $this->post('/login/mfa/enroll', [
+            'code' => TOTP::createFromSecret($method->secret)->now(),
+        ])->assertOk();
+        self::assertGreaterThan(0, $method->recoveryCodes()->count());
+        $method->forceFill(['created_at' => now()->subMinutes(6)])->save();
+
+        $this->get('/login/mfa/recovery-codes')->assertRedirect('/login/mfa/enroll');
+
+        self::assertFalse(UserMfaMethod::query()->whereKey($method->id)->exists());
+        self::assertSame(0, UserRecoveryCode::query()->count());
+        $this->get('/login/mfa/enroll')->assertOk()->assertSee('Manual setup key');
+    }
+
+    public function test_new_primary_sequence_cannot_acknowledge_an_earlier_sequences_recovery_codes(): void
+    {
+        $user = User::factory()->privileged()->create();
+        $firstPending = $this->pendingFor($user);
+        $this->get('/login/mfa/enroll');
+        $method = UserMfaMethod::query()->sole();
+        $this->post('/login/mfa/enroll', [
+            'code' => TOTP::createFromSecret($method->secret)->now(),
+        ])->assertOk();
+        self::assertGreaterThan(0, $method->recoveryCodes()->count());
+
+        $secondPending = $this->pendingFor($user);
+
+        self::assertNotSame($firstPending->id, $secondPending->id);
+        self::assertNotNull($firstPending->refresh()->invalidated_at);
+        $this->get('/login/mfa/recovery-codes')->assertRedirect('/login/mfa/enroll');
+        self::assertSame(0, UserRecoveryCode::query()->count());
+    }
+
+    public function test_acknowledgment_action_purges_expired_setup_and_recovery_codes(): void
+    {
+        config()->set('identity.totp.unconfirmed_ttl_minutes', 5);
+        $user = User::factory()->privileged()->create();
+        $pending = $this->pendingFor($user);
+        $this->get('/login/mfa/enroll');
+        $method = UserMfaMethod::query()->sole();
+        $this->post('/login/mfa/enroll', [
+            'code' => TOTP::createFromSecret($method->secret)->now(),
+        ])->assertOk();
+        $method->forceFill(['created_at' => now()->subMinutes(6)])->save();
+
+        try {
+            $this->app->make(ConfirmTotpEnrollment::class)->acknowledge($pending, null, null, null);
+            self::fail('Expired enrollment acknowledgment was accepted.');
+        } catch (ValidationException) {
+            // Expected generic rejection after the locked cleanup commits.
+        }
+
+        self::assertFalse(UserMfaMethod::query()->whereKey($method->id)->exists());
+        self::assertSame(0, UserRecoveryCode::query()->count());
+        $this->assertGuest();
+    }
+
     public function test_enrollment_failures_share_the_account_lockout_and_invalidate_pending_state(): void
     {
         config()->set('identity.lockout.attempts', 2);
@@ -122,13 +186,17 @@ final class TotpEnrollmentTest extends TestCase
     private function pendingFor(User $user, AuthenticationPurpose $purpose = AuthenticationPurpose::Login): PendingAuthentication
     {
         $this->post('/login/otp', ['email' => $user->email]);
-        $challenge = AuthChallenge::query()->sole();
+        $challenge = AuthChallenge::query()->latest('id')->firstOrFail();
         self::assertSame($purpose, $challenge->purpose);
         $challenge->update(['delivered_at' => now()]);
         $this->post('/login/verify', ['code' => $this->queuedCode()]);
         $this->withCookie((string) config('session.cookie'), $this->sessionStore()->getId());
 
-        return PendingAuthentication::query()->sole();
+        return PendingAuthentication::query()
+            ->whereNull('completed_at')
+            ->whereNull('invalidated_at')
+            ->latest('id')
+            ->sole();
     }
 
     private function grantPrivilege(User $user): void
@@ -151,7 +219,7 @@ final class TotpEnrollmentTest extends TestCase
     private function queuedCode(): string
     {
         /** @var array{data: array{command: string}} $payload */
-        $payload = json_decode((string) DB::table('jobs')->sole()->payload, true, flags: JSON_THROW_ON_ERROR);
+        $payload = json_decode((string) DB::table('jobs')->latest('id')->value('payload'), true, flags: JSON_THROW_ON_ERROR);
         $serialized = $this->app->make(Encrypter::class)->decrypt($payload['data']['command']);
         self::assertIsString($serialized);
         $job = unserialize($serialized, ['allowed_classes' => true]);

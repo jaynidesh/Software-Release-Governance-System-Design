@@ -59,4 +59,46 @@ final class PrivilegedPermissionResolverTest extends TestCase
         $assignment->update(['revoked_at' => now()]);
         self::assertFalse($resolver->userIsPrivileged($user));
     }
+
+    public function test_global_permissions_do_not_flow_from_application_scoped_assignments(): void
+    {
+        $user = User::factory()->active()->create();
+        $application = Application::factory()->create(['is_active' => true]);
+        $role = Role::factory()->create(['is_active' => true]);
+        $permission = Permission::factory()->create([
+            'code' => 'admin.users',
+            'scope_type' => PermissionScope::Global,
+        ]);
+        $role->permissions()->attach($permission);
+        RoleAssignment::factory()->create([
+            'user_id' => $user->id,
+            'role_id' => $role->id,
+            'application_id' => $application->id,
+        ]);
+
+        self::assertFalse($this->app->make(PrivilegedPermissionResolver::class)->userIsPrivileged($user));
+    }
+
+    public function test_global_assignment_of_application_permission_requires_an_active_application(): void
+    {
+        $user = User::factory()->active()->create();
+        $role = Role::factory()->create(['is_active' => true]);
+        $permission = Permission::factory()->create([
+            'code' => 'production.approve',
+            'scope_type' => PermissionScope::Application,
+        ]);
+        $role->permissions()->attach($permission);
+        RoleAssignment::factory()->create([
+            'user_id' => $user->id,
+            'role_id' => $role->id,
+            'application_id' => null,
+        ]);
+        $resolver = $this->app->make(PrivilegedPermissionResolver::class);
+
+        self::assertFalse($resolver->userIsPrivileged($user));
+
+        Application::factory()->create(['is_active' => true]);
+
+        self::assertTrue($resolver->userIsPrivileged($user));
+    }
 }

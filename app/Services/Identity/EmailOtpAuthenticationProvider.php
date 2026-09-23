@@ -31,6 +31,7 @@ final class EmailOtpAuthenticationProvider implements PrimaryAuthenticationProvi
         private readonly Session $session,
         private readonly AuthManager $auth,
         private readonly PrivilegedPermissionResolver $privilegedPermissions,
+        private readonly TotpEnrollmentState $enrollmentState,
     ) {}
 
     public function begin(
@@ -290,7 +291,7 @@ final class EmailOtpAuthenticationProvider implements PrimaryAuthenticationProvi
                 $correlationId,
             );
 
-            if ($this->privilegedPermissions->userIsPrivileged($user)) {
+            if ($this->privilegedPermissions->authenticationRequiresMfa($user, $purpose)) {
                 return $this->completePendingPrimary(
                     $user,
                     $challenge,
@@ -403,6 +404,7 @@ final class EmailOtpAuthenticationProvider implements PrimaryAuthenticationProvi
 
         $this->session->invalidate();
         $this->session->regenerateToken();
+        $this->enrollmentState->discardProofFromEarlierPendingAuthentication($user);
         PendingAuthentication::query()
             ->where('user_id', $user->getKey())
             ->where('purpose', $purpose)

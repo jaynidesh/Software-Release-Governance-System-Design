@@ -15,6 +15,7 @@ use App\Services\Identity\AccountLockout;
 use App\Services\Identity\LocalTotpQrCode;
 use App\Services\Identity\OtpHasher;
 use App\Services\Identity\PrivilegedPermissionResolver;
+use App\Services\Identity\TotpEnrollmentState;
 use Illuminate\Contracts\Session\Session;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -28,6 +29,7 @@ final class BeginTotpEnrollment
         private readonly OtpHasher $hasher,
         private readonly PrivilegedPermissionResolver $privilegedPermissions,
         private readonly AccountLockout $lockout,
+        private readonly TotpEnrollmentState $enrollmentState,
     ) {}
 
     /** @return array{method: UserMfaMethod, secret: ?string, svg: ?string} */
@@ -47,10 +49,25 @@ final class BeginTotpEnrollment
                 ->lockForUpdate()
                 ->first();
 
-            if ($method !== null && $method->confirmed_at === null
-                && $method->created_at?->lte(now()->subMinutes((int) config('identity.totp.unconfirmed_ttl_minutes')))) {
+            if ($method !== null && $this->enrollmentState->isExpired($method)) {
                 $method->delete();
                 $method = null;
+            }
+
+            if ($method !== null && $method->disabled_at !== null) {
+                $secret = $this->totp->generateSecret();
+                $method->recoveryCodes()->delete();
+                $method->forceFill([
+                    'secret' => $secret,
+                    'confirmed_at' => null,
+                    'rotated_at' => now(),
+                    'disabled_at' => null,
+                    'last_accepted_timestep' => null,
+                    'created_at' => now(),
+                ])->save();
+                $uri = $this->totp->provisioningUri($secret, $user->email);
+
+                return ['method' => $method, 'secret' => $secret, 'svg' => $this->qrCode->render($uri)];
             }
 
             if ($method !== null) {
@@ -80,7 +97,7 @@ final class BeginTotpEnrollment
             && $pending->user_session_version === $user->session_version
             && hash_equals($pending->session_id_hmac, $this->hasher->hashSessionId($this->session->getId()))
             && ! $this->lockout->isLocked($user)
-            && $this->privilegedPermissions->userIsPrivileged($user)
+            && $this->privilegedPermissions->authenticationRequiresMfa($user, $purpose)
             && match ($purpose) {
                 AuthenticationPurpose::Activation => $state === UserState::Invited
                     && $user->email_verified_at !== null

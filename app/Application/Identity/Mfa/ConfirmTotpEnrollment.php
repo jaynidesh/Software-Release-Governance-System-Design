@@ -18,6 +18,7 @@ use App\Services\Identity\IdentityEventRecorder;
 use App\Services\Identity\OtpHasher;
 use App\Services\Identity\PrivilegedPermissionResolver;
 use App\Services\Identity\RecoveryCodeHasher;
+use App\Services\Identity\TotpEnrollmentState;
 use Illuminate\Contracts\Session\Session;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -35,6 +36,7 @@ final class ConfirmTotpEnrollment
         private readonly Session $session,
         private readonly OtpHasher $hasher,
         private readonly PrivilegedPermissionResolver $privilegedPermissions,
+        private readonly TotpEnrollmentState $enrollmentState,
     ) {}
 
     /** @return list<string> */
@@ -53,7 +55,12 @@ final class ConfirmTotpEnrollment
 
             if ($user === null || $lockedPending === null || $method === null
                 || ! $this->pendingIsCurrent($lockedPending, $user)
+                || $this->enrollmentState->isExpired($method)
                 || $method->recoveryCodes()->exists()) {
+                if ($method !== null && $this->enrollmentState->isExpired($method)) {
+                    $method->delete();
+                }
+
                 return null;
             }
 
@@ -74,6 +81,16 @@ final class ConfirmTotpEnrollment
                 if ($locked) {
                     $this->events->security('identity.account.locked', null, $user, [], null, null, $lockedPending->correlation_id);
                 }
+
+                $this->events->security(
+                    'identity.authentication.failed',
+                    null,
+                    $user,
+                    ['purpose' => $this->purpose($lockedPending)->value],
+                    null,
+                    null,
+                    $lockedPending->correlation_id,
+                );
 
                 return null;
             }
@@ -106,7 +123,7 @@ final class ConfirmTotpEnrollment
         ?string $userAgent,
         ?string $correlationId,
     ): void {
-        DB::transaction(function () use ($pending, $ipAddress, $userAgent, $correlationId): void {
+        $acknowledged = DB::transaction(function () use ($pending, $ipAddress, $userAgent, $correlationId): bool {
             $user = User::query()->whereKey($pending->user_id)->lockForUpdate()->firstOrFail();
             $lockedPending = PendingAuthentication::query()->whereKey($pending->id)->lockForUpdate()->firstOrFail();
             $method = UserMfaMethod::query()
@@ -117,9 +134,15 @@ final class ConfirmTotpEnrollment
                 ->lockForUpdate()
                 ->firstOrFail();
 
+            if ($this->enrollmentState->isExpired($method)) {
+                $method->delete();
+
+                return false;
+            }
+
             if (! $this->pendingIsCurrent($lockedPending, $user)
                 || ! $method->recoveryCodes()->exists()) {
-                $this->reject();
+                return false;
             }
 
             $method->update(['confirmed_at' => now()]);
@@ -142,7 +165,12 @@ final class ConfirmTotpEnrollment
             $this->recordAuthenticationSuccess($user, $purpose, $ipAddress, $userAgent, $correlationId);
             $this->sessions->create($user, $purpose, true);
 
+            return true;
         }, 3);
+
+        if (! $acknowledged) {
+            $this->reject();
+        }
     }
 
     private function generateRecoveryCode(int $length): string
@@ -173,7 +201,7 @@ final class ConfirmTotpEnrollment
             && $pending->user_session_version === $user->session_version
             && hash_equals($pending->session_id_hmac, $this->hasher->hashSessionId($this->session->getId()))
             && ! $this->lockout->isLocked($user)
-            && $this->privilegedPermissions->userIsPrivileged($user)
+            && $this->privilegedPermissions->authenticationRequiresMfa($user, $purpose)
             && match ($purpose) {
                 AuthenticationPurpose::Activation => $state === UserState::Invited
                     && $user->email_verified_at !== null

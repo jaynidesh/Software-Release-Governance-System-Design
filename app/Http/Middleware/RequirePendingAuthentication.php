@@ -14,9 +14,11 @@ use App\Models\UserMfaMethod;
 use App\Services\Identity\AccountLockout;
 use App\Services\Identity\OtpHasher;
 use App\Services\Identity\PrivilegedPermissionResolver;
+use App\Services\Identity\TotpEnrollmentState;
 use Closure;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Symfony\Component\HttpFoundation\Response;
 
 final class RequirePendingAuthentication
@@ -25,6 +27,7 @@ final class RequirePendingAuthentication
         private readonly OtpHasher $hasher,
         private readonly PrivilegedPermissionResolver $privilegedPermissions,
         private readonly AccountLockout $lockout,
+        private readonly TotpEnrollmentState $enrollmentState,
     ) {}
 
     public function handle(Request $request, Closure $next, string $requiredStep): Response
@@ -73,7 +76,7 @@ final class RequirePendingAuthentication
             || ! hash_equals($pending->session_id_hmac, $this->hasher->hashSessionId($request->session()->getId()))
             || $this->lockout->isLocked($user)
             || ! $this->eligible($user, $this->purpose($pending))
-            || ! $this->privilegedPermissions->userIsPrivileged($user)) {
+            || ! $this->privilegedPermissions->authenticationRequiresMfa($user, $this->purpose($pending))) {
             return false;
         }
 
@@ -99,21 +102,31 @@ final class RequirePendingAuthentication
 
     private function nextStep(User $user): string
     {
-        $method = UserMfaMethod::query()
-            ->where('user_id', $user->getKey())
-            ->where('type', MfaMethodType::Totp)
-            ->whereNull('disabled_at')
-            ->first();
+        return DB::transaction(function () use ($user): string {
+            User::query()->whereKey($user->getKey())->lockForUpdate()->firstOrFail();
+            $method = UserMfaMethod::query()
+                ->where('user_id', $user->getKey())
+                ->where('type', MfaMethodType::Totp)
+                ->whereNull('disabled_at')
+                ->lockForUpdate()
+                ->first();
 
-        if ($method?->confirmed_at !== null) {
-            return 'verify';
-        }
+            if ($method !== null && $this->enrollmentState->isExpired($method)) {
+                $method->delete();
 
-        if ($method !== null && $method->recoveryCodes()->exists()) {
-            return 'recovery';
-        }
+                return 'enroll';
+            }
 
-        return 'enroll';
+            if ($method?->confirmed_at !== null) {
+                return 'verify';
+            }
+
+            if ($method !== null && $method->recoveryCodes()->exists()) {
+                return 'recovery';
+            }
+
+            return 'enroll';
+        }, 3);
     }
 
     private function noStoreRedirect(string $route): RedirectResponse

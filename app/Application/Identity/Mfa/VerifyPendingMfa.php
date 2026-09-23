@@ -57,6 +57,16 @@ final class VerifyPendingMfa
 
             if ($user === null || $lockedPending === null || $method === null
                 || ! $this->pendingIsCurrent($lockedPending, $user)) {
+                $this->events->security(
+                    'identity.authentication.failed',
+                    null,
+                    $user,
+                    ['purpose' => $this->purpose($lockedPending ?? $pending)->value],
+                    $ipAddress,
+                    $userAgent,
+                    $correlationId,
+                );
+
                 return null;
             }
 
@@ -104,6 +114,16 @@ final class VerifyPendingMfa
                     $this->events->security('identity.account.locked', null, $user, [], $ipAddress, $userAgent, $correlationId);
                 }
 
+                $this->events->security(
+                    'identity.authentication.failed',
+                    null,
+                    $user,
+                    ['purpose' => $this->purpose($lockedPending)->value],
+                    $ipAddress,
+                    $userAgent,
+                    $correlationId,
+                );
+
                 return null;
             }
 
@@ -117,6 +137,15 @@ final class VerifyPendingMfa
                     'activated_at' => now(),
                     'email_verified_at' => $user->email_verified_at ?? now(),
                 ]);
+                $this->events->security(
+                    'identity.invitation.activated',
+                    $user,
+                    $user,
+                    [],
+                    $ipAddress,
+                    $userAgent,
+                    $correlationId,
+                );
             }
 
             $user->forceFill(['last_login_at' => now()])->save();
@@ -163,7 +192,7 @@ final class VerifyPendingMfa
             && $pending->user_session_version === $user->session_version
             && hash_equals($pending->session_id_hmac, $this->hasher->hashSessionId($this->session->getId()))
             && ! $this->lockout->isLocked($user)
-            && $this->privilegedPermissions->userIsPrivileged($user)
+            && $this->privilegedPermissions->authenticationRequiresMfa($user, $purpose)
             && match ($purpose) {
                 AuthenticationPurpose::Activation => $state === UserState::Invited
                     && $user->email_verified_at !== null

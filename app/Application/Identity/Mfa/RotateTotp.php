@@ -6,19 +6,18 @@ namespace App\Application\Identity\Mfa;
 
 use App\Contracts\Identity\TotpVerifier;
 use App\Domain\Identity\Enums\MfaMethodType;
-use App\Models\AuthSession;
 use App\Models\User;
 use App\Models\UserMfaMethod;
+use App\Services\Identity\CurrentAuthSessionValidator;
 use App\Services\Identity\IdentityEventRecorder;
 use App\Services\Identity\LocalTotpQrCode;
 use App\Support\Exceptions\DomainRuleViolation;
-use Illuminate\Contracts\Session\Session;
 use Illuminate\Support\Facades\DB;
 
 final class RotateTotp
 {
     public function __construct(
-        private readonly Session $session,
+        private readonly CurrentAuthSessionValidator $sessions,
         private readonly TotpVerifier $totp,
         private readonly LocalTotpQrCode $qrCode,
         private readonly IdentityEventRecorder $events,
@@ -63,16 +62,7 @@ final class RotateTotp
 
     private function assertFreshMfa(User $user): void
     {
-        $fresh = AuthSession::query()
-            ->where('session_id', $this->session->getId())
-            ->where('user_id', $user->id)
-            ->where('user_session_version', $user->session_version)
-            ->whereNull('revoked_at')
-            ->whereNotNull('mfa_authenticated_at')
-            ->where('reauthenticated_at', '>=', now()->subMinutes((int) config('identity.privileged_reauth_minutes')))
-            ->exists();
-
-        if (! $fresh) {
+        if (! $this->sessions->hasFreshMfa($user)) {
             throw new DomainRuleViolation('fresh_mfa_required', ['Fresh email and MFA authentication is required.']);
         }
     }

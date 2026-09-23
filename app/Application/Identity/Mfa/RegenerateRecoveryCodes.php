@@ -5,15 +5,14 @@ declare(strict_types=1);
 namespace App\Application\Identity\Mfa;
 
 use App\Domain\Identity\Enums\MfaMethodType;
-use App\Models\AuthSession;
 use App\Models\User;
 use App\Models\UserMfaMethod;
 use App\Models\UserRecoveryCode;
 use App\Notifications\Identity\RecoveryCodesRegeneratedNotification;
+use App\Services\Identity\CurrentAuthSessionValidator;
 use App\Services\Identity\IdentityEventRecorder;
 use App\Services\Identity\RecoveryCodeHasher;
 use App\Support\Exceptions\DomainRuleViolation;
-use Illuminate\Contracts\Session\Session;
 use Illuminate\Support\Facades\DB;
 
 final class RegenerateRecoveryCodes
@@ -21,7 +20,7 @@ final class RegenerateRecoveryCodes
     private const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
     public function __construct(
-        private readonly Session $session,
+        private readonly CurrentAuthSessionValidator $sessions,
         private readonly RecoveryCodeHasher $hasher,
         private readonly IdentityEventRecorder $events,
     ) {}
@@ -68,16 +67,7 @@ final class RegenerateRecoveryCodes
 
     private function assertFreshMfa(User $user): void
     {
-        $fresh = AuthSession::query()
-            ->where('session_id', $this->session->getId())
-            ->where('user_id', $user->id)
-            ->where('user_session_version', $user->session_version)
-            ->whereNull('revoked_at')
-            ->whereNotNull('mfa_authenticated_at')
-            ->where('reauthenticated_at', '>=', now()->subMinutes((int) config('identity.privileged_reauth_minutes')))
-            ->exists();
-
-        if (! $fresh) {
+        if (! $this->sessions->hasFreshMfa($user)) {
             throw new DomainRuleViolation('fresh_mfa_required', ['Fresh email and MFA authentication is required.']);
         }
     }
