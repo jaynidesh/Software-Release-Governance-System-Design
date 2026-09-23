@@ -9,7 +9,10 @@ use Monolog\Processor\ProcessorInterface;
 
 final class RedactSensitiveContext implements ProcessorInterface
 {
-    private const SENSITIVE_PARTS = ['authorization', 'cookie', 'password', 'secret', 'token', 'api_key', 'private_key'];
+    private const SENSITIVE_PARTS = [
+        'authorization', 'cookie', 'password', 'secret', 'token', 'api_key', 'private_key',
+        'otp', 'code', 'totp', 'recovery_code', 'mfa_secret', 'normalized_email',
+    ];
 
     public function __invoke(LogRecord $record): LogRecord
     {

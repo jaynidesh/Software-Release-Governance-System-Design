@@ -22,6 +22,8 @@ final class RedactSensitiveContextTest extends TestCase
             [
                 'email' => 'user@example.test', 'password' => 'secret',
                 'headers' => ['Authorization' => 'Bearer secret', 'accept' => 'application/json'], 'smtp_token' => 'secret',
+                'otp' => '123456', 'verification_code' => '123456', 'normalized_email' => 'user@example.test',
+                'totp' => '123456', 'recovery_code' => 'secret', 'mfa_secret' => 'secret',
             ],
             [
                 'transport' => ['private_key' => 'secret', 'attempt' => 2],
@@ -35,6 +37,12 @@ final class RedactSensitiveContextTest extends TestCase
         self::assertSame('[REDACTED]', $redacted->context['headers']['Authorization']);
         self::assertSame('application/json', $redacted->context['headers']['accept']);
         self::assertSame('[REDACTED]', $redacted->context['smtp_token']);
+        self::assertSame('[REDACTED]', $redacted->context['otp']);
+        self::assertSame('[REDACTED]', $redacted->context['verification_code']);
+        self::assertSame('[REDACTED]', $redacted->context['normalized_email']);
+        self::assertSame('[REDACTED]', $redacted->context['totp']);
+        self::assertSame('[REDACTED]', $redacted->context['recovery_code']);
+        self::assertSame('[REDACTED]', $redacted->context['mfa_secret']);
         self::assertSame('[REDACTED]', $redacted->extra['transport']['private_key']);
         self::assertSame(2, $redacted->extra['transport']['attempt']);
         self::assertSame('mu', $redacted->extra['region']);
