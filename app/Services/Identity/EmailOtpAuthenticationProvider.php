@@ -12,7 +12,6 @@ use App\Domain\Identity\Enums\AuthenticationPurpose;
 use App\Domain\Identity\Enums\UserState;
 use App\Models\AuthChallenge;
 use App\Models\PendingAuthentication;
-use App\Models\Permission;
 use App\Models\User;
 use Illuminate\Auth\AuthManager;
 use Illuminate\Contracts\Auth\StatefulGuard;
@@ -31,6 +30,7 @@ final class EmailOtpAuthenticationProvider implements PrimaryAuthenticationProvi
         private readonly AccountLockout $lockout,
         private readonly Session $session,
         private readonly AuthManager $auth,
+        private readonly PrivilegedPermissionResolver $privilegedPermissions,
     ) {}
 
     public function begin(
@@ -290,7 +290,7 @@ final class EmailOtpAuthenticationProvider implements PrimaryAuthenticationProvi
                 $correlationId,
             );
 
-            if ($this->hasPrivilegedPermission($user)) {
+            if ($this->privilegedPermissions->userIsPrivileged($user)) {
                 return $this->completePendingPrimary(
                     $user,
                     $challenge,
@@ -482,46 +482,6 @@ final class EmailOtpAuthenticationProvider implements PrimaryAuthenticationProvi
             $userAgent,
             $correlationId,
         );
-    }
-
-    private function hasPrivilegedPermission(User $user): bool
-    {
-        $permissionCodes = Permission::query()
-            ->select('permissions.code')
-            ->join('role_permissions', 'role_permissions.permission_id', '=', 'permissions.id')
-            ->join('roles', 'roles.id', '=', 'role_permissions.role_id')
-            ->join('role_assignments', 'role_assignments.role_id', '=', 'roles.id')
-            ->leftJoin('applications', 'applications.id', '=', 'role_assignments.application_id')
-            ->where('role_assignments.user_id', $user->getKey())
-            ->where('roles.is_active', true)
-            ->whereNull('roles.deleted_at')
-            ->where('role_assignments.starts_at', '<=', now())
-            ->whereNull('role_assignments.revoked_at')
-            ->where(static function ($query): void {
-                $query->whereNull('role_assignments.ends_at')
-                    ->orWhere('role_assignments.ends_at', '>', now());
-            })
-            ->where(static function ($query): void {
-                $query->whereNull('role_assignments.application_id')
-                    ->orWhere('applications.is_active', true);
-            })
-            ->distinct()
-            ->pluck('permissions.code');
-
-        foreach ($permissionCodes as $permissionCode) {
-            foreach ((array) config('identity.privileged_permissions', []) as $privilegedPermission) {
-                if (! is_string($permissionCode) || ! is_string($privilegedPermission)) {
-                    continue;
-                }
-
-                if ($permissionCode === $privilegedPermission
-                    || (str_ends_with($privilegedPermission, '.') && str_starts_with($permissionCode, $privilegedPermission))) {
-                    return true;
-                }
-            }
-        }
-
-        return false;
     }
 
     private function rejectCode(): never

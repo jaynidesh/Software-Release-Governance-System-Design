@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Middleware\AssignCorrelationId;
+use App\Http\Middleware\RequirePendingAuthentication;
 use App\Http\Middleware\SecurityHeaders;
 use App\Support\Exceptions\DomainRuleViolation;
 use Illuminate\Foundation\Application;
@@ -19,6 +20,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->redirectGuestsTo(static fn (): string => route('home'));
         $middleware->prepend(AssignCorrelationId::class);
         $middleware->append(SecurityHeaders::class);
+        $middleware->alias(['pending.auth' => RequirePendingAuthentication::class]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $shouldRenderJson = static fn (Request $request): bool => $request->is('api/*') || $request->expectsJson();

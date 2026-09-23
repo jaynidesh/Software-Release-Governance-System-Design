@@ -176,8 +176,7 @@ final class InvitationActivationTest extends TestCase
 
         $response = $this->post('/login/verify', ['code' => $code]);
 
-        $response->assertRedirect('/login')
-            ->assertSessionHas('status', 'Additional authentication is required.')
+        $response->assertRedirect('/login/mfa/enroll')
             ->assertSessionHas('identity.pending_authentication')
             ->assertSessionMissing('identity.auth_challenge');
         $this->assertGuest();

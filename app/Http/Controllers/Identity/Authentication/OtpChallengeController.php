@@ -58,7 +58,9 @@ final class OtpChallengeController extends Controller
         }
 
         $response = $completed->requiresAdditionalProof()
-            ? redirect()->route('login')->with('status', 'Additional authentication is required.')
+            ? redirect()->route($completed->user->mfaMethods()->whereNotNull('confirmed_at')->whereNull('disabled_at')->exists()
+                ? 'identity.mfa.verify.create'
+                : 'identity.mfa.enroll.create')
             : redirect()->route('home');
         $response->headers->set('Cache-Control', 'no-store, private');
 

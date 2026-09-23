@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace App\Providers;
 
 use App\Contracts\Foundation\ReadinessCheck;
+use App\Contracts\Identity\AuthenticatedSessionCreator;
 use App\Contracts\Identity\AuthorizationService;
 use App\Contracts\Identity\OtpDelivery;
 use App\Contracts\Identity\PrimaryAuthenticationProvider;
+use App\Contracts\Identity\TotpVerifier;
 use App\Domain\Identity\AuthorizationCatalog;
 use App\Models\Application;
 use App\Models\AuthChallenge;
@@ -17,8 +19,10 @@ use App\Policies\ApplicationPolicy;
 use App\Services\Foundation\DatabaseReadinessCheck;
 use App\Services\Identity\EloquentAuthorizationService;
 use App\Services\Identity\EmailOtpAuthenticationProvider;
+use App\Services\Identity\LaravelAuthenticatedSessionCreator;
 use App\Services\Identity\LaravelOtpDelivery;
 use App\Services\Identity\OtpDeliveryFailureReporter;
+use App\Services\Identity\OtpPhpTotpVerifier;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Notifications\Events\NotificationFailed;
 use Illuminate\Pagination\Paginator;
@@ -35,8 +39,10 @@ class AppServiceProvider extends ServiceProvider
     {
         $this->app->bind(ReadinessCheck::class, DatabaseReadinessCheck::class);
         $this->app->bind(AuthorizationService::class, EloquentAuthorizationService::class);
+        $this->app->bind(AuthenticatedSessionCreator::class, LaravelAuthenticatedSessionCreator::class);
         $this->app->bind(PrimaryAuthenticationProvider::class, EmailOtpAuthenticationProvider::class);
         $this->app->bind(OtpDelivery::class, LaravelOtpDelivery::class);
+        $this->app->bind(TotpVerifier::class, OtpPhpTotpVerifier::class);
     }
 
     /**
