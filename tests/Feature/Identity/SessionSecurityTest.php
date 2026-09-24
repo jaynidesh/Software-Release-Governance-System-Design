@@ -10,11 +10,15 @@ use App\Models\AuthSession;
 use App\Models\SecurityEvent;
 use App\Models\User;
 use App\Support\Exceptions\AuthenticatedSessionPersistenceException;
+use Illuminate\Contracts\Debug\ShouldntReport;
 use Illuminate\Contracts\Encryption\Encrypter;
 use Illuminate\Contracts\Session\Session;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Notifications\SendQueuedNotifications;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Monolog\Handler\TestHandler;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 use Tests\TestCase;
@@ -70,6 +74,63 @@ final class SessionSecurityTest extends TestCase
         $this->assertDatabaseHas('security_events', ['event_code' => 'identity.session.persistence_failed']);
     }
 
+    public function test_metadata_failure_still_rolls_back_browser_state_when_database_cleanup_also_fails(): void
+    {
+        $user = User::factory()->active()->create();
+        $this->post('/login/otp', ['email' => $user->email]);
+        AuthChallenge::query()->sole()->update(['delivered_at' => now()]);
+        $oldSessionId = $this->sessionStore()->getId();
+        $oldToken = $this->sessionStore()->token();
+        $dispatcher = AuthSession::getEventDispatcher();
+        self::assertNotNull($dispatcher);
+        AuthSession::setEventDispatcher(clone $dispatcher);
+        AuthSession::creating(static function (): never {
+            throw new RuntimeException('Synthetic primary metadata failure.');
+        });
+        $cleanupFailureRaised = false;
+        $payloadCleanupAttempted = false;
+        $failedSessionId = null;
+        DB::listen(static function (QueryExecuted $query) use (&$cleanupFailureRaised, &$payloadCleanupAttempted, &$failedSessionId): void {
+            if (! $cleanupFailureRaised && str_starts_with($query->sql, 'delete from `auth_sessions`')) {
+                $cleanupFailureRaised = true;
+                $failedSessionId = $query->bindings[0] ?? null;
+
+                throw new RuntimeException('Synthetic cleanup outage.');
+            }
+
+            if ($cleanupFailureRaised && str_starts_with($query->sql, 'delete from `sessions`')) {
+                $payloadCleanupAttempted = true;
+
+                throw new RuntimeException('Synthetic session-store cleanup outage.');
+            }
+        });
+        $handler = new TestHandler;
+        Log::getLogger()->pushHandler($handler);
+
+        try {
+            $this->withoutExceptionHandling();
+            $this->post('/login/verify', ['code' => $this->queuedOtpCode()]);
+            self::fail('The synthetic metadata failure was not raised.');
+        } catch (AuthenticatedSessionPersistenceException $exception) {
+            self::assertSame('The authenticated session could not be persisted.', $exception->getMessage());
+            self::assertInstanceOf(ShouldntReport::class, $exception);
+        } finally {
+            AuthSession::setEventDispatcher($dispatcher);
+        }
+
+        self::assertTrue($cleanupFailureRaised);
+        self::assertTrue($payloadCleanupAttempted);
+        self::assertIsString($failedSessionId);
+        $this->assertGuest();
+        self::assertNotSame($oldSessionId, $this->sessionStore()->getId());
+        self::assertNotSame($failedSessionId, $this->sessionStore()->getId());
+        self::assertNotSame($oldToken, $this->sessionStore()->token());
+        $event = SecurityEvent::query()->where('event_code', 'identity.session.persistence_failed')->sole();
+        self::assertSame([], $event->metadata);
+        self::assertStringNotContainsString($failedSessionId, $event->toJson());
+        self::assertStringNotContainsString($failedSessionId, json_encode($handler->getRecords(), JSON_THROW_ON_ERROR));
+    }
+
     #[DataProvider('invalidSessionStates')]
     public function test_invalid_authenticated_sessions_are_destroyed_with_a_generic_event_and_redirect(string $state): void
     {
@@ -86,7 +147,9 @@ final class SessionSecurityTest extends TestCase
             'deactivated' => $user->update(['state' => UserState::Deactivated]),
         };
 
-        $this->get('/')->assertRedirect('/login')->assertSessionHas('status', 'Your session is no longer available. Please sign in again.');
+        $this->get('/')->assertRedirect('/login')
+            ->assertSessionHas('status', 'Your session is no longer available. Please sign in again.')
+            ->assertHeader('Cache-Control', 'no-store, private');
 
         $this->assertGuest();
         self::assertNotSame($oldToken, $this->sessionStore()->token());

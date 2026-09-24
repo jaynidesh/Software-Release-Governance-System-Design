@@ -66,7 +66,9 @@ return Application::configure(basePath: dirname(__DIR__))
                 $response->headers->set('X-Correlation-ID', $id);
             }
 
-            if ($request->is('login') || $request->is('login/*')) {
+            if ($request->is('login') || $request->is('login/*')
+                || $request->is('reauthenticate') || $request->is('reauthenticate/*')
+                || $request->is('security/recovery-codes') || $request->is('security/totp')) {
                 $response->headers->set('Cache-Control', 'no-store, private');
             }
 

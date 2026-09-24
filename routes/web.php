@@ -49,8 +49,10 @@ Route::middleware('guest')->group(function (): void {
 
 Route::middleware('auth')->prefix('admin')->name('admin.')->group(function (): void {
     Route::resource('applications', ApplicationController::class)
-        ->only(['index', 'create', 'store', 'edit', 'update']);
+        ->only(['index', 'create', 'store', 'edit', 'update'])
+        ->middlewareFor(['store', 'update'], 'fresh.reauth:admin.applications.index');
     Route::patch('applications/{application}/state', ApplicationStateController::class)
+        ->middleware('fresh.reauth:admin.applications.index')
         ->name('applications.state.update');
 });
 
@@ -64,7 +66,7 @@ Route::middleware('auth')->prefix('security')->name('identity.')->group(function
     Route::delete('/sessions/{authSession}', [SessionController::class, 'destroy'])->name('sessions.destroy');
 });
 
-Route::middleware(['auth', 'no-store.auth'])->prefix('reauthenticate')->name('identity.reauthentication.')->group(function (): void {
+Route::middleware(['no-store.auth', 'auth'])->prefix('reauthenticate')->name('identity.reauthentication.')->group(function (): void {
     Route::get('/', [ReauthenticationController::class, 'show'])->name('show');
     Route::post('/', [ReauthenticationController::class, 'store'])->name('begin');
     Route::post('/verify', [ReauthenticationController::class, 'verify'])->name('verify');
@@ -75,5 +77,5 @@ Route::middleware(['auth', 'no-store.auth'])->prefix('reauthenticate')->name('id
 });
 
 Route::post('/logout', LogoutController::class)
-    ->middleware(['auth', 'no-store.auth'])
+    ->middleware(['no-store.auth', 'auth'])
     ->name('logout');

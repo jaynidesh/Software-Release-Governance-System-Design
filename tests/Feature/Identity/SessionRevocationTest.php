@@ -116,7 +116,12 @@ final class SessionRevocationTest extends TestCase
     {
         $user = User::factory()->active()->create();
         $metadataOrphan = AuthSession::query()->create($this->metadata($user, bin2hex(random_bytes(20)), 'Metadata orphan'));
-        $metadataOrphan->forceFill(['created_at' => now()->subMinutes(6)])->save();
+        AuthSession::withoutTimestamps(function () use ($metadataOrphan): void {
+            $metadataOrphan->forceFill([
+                'created_at' => now()->subMinutes(6),
+                'updated_at' => now()->subMinutes(6),
+            ])->save();
+        });
         $payloadOrphanId = bin2hex(random_bytes(20));
         $this->insertPayload($payloadOrphanId, $user, now()->subMinutes(6)->timestamp);
         $valid = $this->storedSession($user, 'Valid');
@@ -133,6 +138,27 @@ final class SessionRevocationTest extends TestCase
         self::assertTrue(DB::table('sessions')->where('id', $valid->session_id)->exists());
         self::assertTrue(AuthSession::query()->whereKey($freshMetadata->id)->exists());
         self::assertTrue(DB::table('sessions')->where('id', $freshPayloadId)->exists());
+    }
+
+    public function test_orphan_cleanup_retains_old_metadata_that_was_freshly_rekeyed_before_its_payload_is_written(): void
+    {
+        $user = User::factory()->active()->create();
+        $authSession = $this->authenticate($user);
+        AuthSession::withoutTimestamps(function () use ($authSession): void {
+            $authSession->forceFill([
+                'created_at' => now()->subMinutes(6),
+                'updated_at' => now()->subMinutes(6),
+            ])->save();
+        });
+
+        $this->app->make(AuthenticatedSessionManager::class)->rekey($user, false);
+        $rekeyedSessionId = $authSession->refresh()->session_id;
+        self::assertFalse(DB::table('sessions')->where('id', $rekeyedSessionId)->exists());
+
+        $result = $this->app->make(AuthenticatedSessionManager::class)->purgeOrphans();
+
+        self::assertSame(['metadata' => 0, 'payloads' => 0], $result);
+        self::assertTrue(AuthSession::query()->whereKey($authSession->id)->exists());
     }
 
     private function authenticate(User $user, bool $fresh = false): AuthSession

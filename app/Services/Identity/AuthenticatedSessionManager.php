@@ -12,6 +12,7 @@ use Illuminate\Auth\AuthManager;
 use Illuminate\Contracts\Auth\StatefulGuard;
 use Illuminate\Contracts\Session\Session;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 use LogicException;
 use Throwable;
 
@@ -75,14 +76,9 @@ final class AuthenticatedSessionManager
 
             return $authSession;
         } catch (Throwable) {
-            if (is_string($newSessionId)) {
-                AuthSession::query()->where('session_id', $newSessionId)->delete();
-                DB::table('sessions')->where('id', $newSessionId)->delete();
-            }
+            $this->discardFailedAuthentication($newSessionId);
 
-            $guard->logout();
-            $this->session->invalidate();
-            $this->session->regenerateToken();
+            $this->rollbackFailedAuthentication($guard);
             $this->schedulePersistenceFailure($user);
 
             throw new AuthenticatedSessionPersistenceException;
@@ -189,7 +185,7 @@ final class AuthenticatedSessionManager
     {
         return DB::transaction(function (): array {
             $metadata = AuthSession::query()
-                ->where('created_at', '<=', now()->subSeconds(self::ORPHAN_GRACE_SECONDS))
+                ->where('updated_at', '<=', now()->subSeconds(self::ORPHAN_GRACE_SECONDS))
                 ->whereNotExists(static function ($query): void {
                     $query->selectRaw('1')
                         ->from('sessions')
@@ -228,6 +224,38 @@ final class AuthenticatedSessionManager
             'identity.auth_challenge',
             'identity.auth_purpose',
         ]);
+    }
+
+    private function discardFailedAuthentication(?string $sessionId): void
+    {
+        if ($sessionId === null) {
+            return;
+        }
+
+        try {
+            AuthSession::query()->where('session_id', $sessionId)->delete();
+            DB::table('sessions')->where('id', $sessionId)->delete();
+        } catch (Throwable) {
+            // Browser authentication rollback and the sanitized failure remain mandatory during a database outage.
+        }
+    }
+
+    private function rollbackFailedAuthentication(StatefulGuard $guard): void
+    {
+        try {
+            $guard->logout();
+        } catch (Throwable) {
+            // Continue clearing the browser session even when the backing store is unavailable.
+        }
+
+        try {
+            $this->session->invalidate();
+        } catch (Throwable) {
+            $this->session->flush();
+            $this->session->setId(Str::random(40));
+        }
+
+        $this->session->regenerateToken();
     }
 
     private function boundedUserAgent(?string $userAgent): ?string

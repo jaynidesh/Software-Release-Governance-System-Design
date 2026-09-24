@@ -32,7 +32,8 @@ final class AuthorizationBoundaryTest extends TestCase
         $this->post('/admin/applications', [
             'code' => 'payments',
             'name' => 'Payments',
-        ])->assertForbidden();
+        ])->assertRedirect('/reauthenticate')
+            ->assertSessionHas('identity.reauthentication_return_route', 'admin.applications.index');
 
         $this->assertDatabaseMissing('applications', ['code' => 'payments']);
     }
@@ -40,7 +41,7 @@ final class AuthorizationBoundaryTest extends TestCase
     public function test_transactional_action_reauthorizes_after_the_form_request_boundary(): void
     {
         $user = User::factory()->active()->create();
-        $this->authenticate($user);
+        $this->authenticate($user, now(), now());
         $this->actingAs($user);
         $authorization = new class implements AuthorizationService
         {

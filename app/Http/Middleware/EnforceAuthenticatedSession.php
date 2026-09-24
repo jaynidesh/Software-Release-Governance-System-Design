@@ -33,8 +33,11 @@ final class EnforceAuthenticatedSession
         if ($authSession === null) {
             $this->sessions->invalidateCurrent($user);
 
-            return redirect()->route('login')
+            $response = redirect()->route('login')
                 ->with('status', 'Your session is no longer available. Please sign in again.');
+            $response->headers->set('Cache-Control', 'no-store, private');
+
+            return $response;
         }
 
         $this->activity->record($authSession, $request);

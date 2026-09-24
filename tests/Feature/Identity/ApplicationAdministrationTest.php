@@ -8,6 +8,7 @@ use App\Contracts\Identity\AuthorizationService;
 use App\Domain\Identity\AuthorizationCatalog;
 use App\Domain\Identity\Enums\MfaMethodType;
 use App\Models\Application;
+use App\Models\AuthChallenge;
 use App\Models\AuthSession;
 use App\Models\Permission;
 use App\Models\Role;
@@ -20,6 +21,9 @@ use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Contracts\Session\Session;
 use Illuminate\Foundation\Http\Middleware\PreventRequestForgery;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Notifications\SendQueuedNotifications;
+use Illuminate\Support\Facades\DB;
+use OTPHP\TOTP;
 use Tests\TestCase;
 
 final class ApplicationAdministrationTest extends TestCase
@@ -166,7 +170,63 @@ final class ApplicationAdministrationTest extends TestCase
         $this->assertDatabaseMissing('applications', ['code' => 'payments']);
     }
 
-    private function actAsApplicationAdministrator(): User
+    public function test_stale_application_mutations_enter_explicit_reauthentication_with_a_safe_get_landing_route(): void
+    {
+        $this->withoutVite();
+        $user = $this->actAsApplicationAdministrator(now()->subHour());
+        $application = Application::factory()->create(['name' => 'Original', 'is_active' => true]);
+
+        $this->post('/admin/applications', [
+            'code' => 'blocked-create',
+            'name' => 'Blocked create',
+        ])->assertRedirect('/reauthenticate')
+            ->assertHeader('Cache-Control', 'no-store, private');
+        $this->patch('/admin/applications/'.$application->public_id, [
+            'name' => 'Blocked rename',
+        ])->assertRedirect('/reauthenticate');
+        $this->patch('/admin/applications/'.$application->public_id.'/state', [
+            'is_active' => false,
+        ])->assertRedirect('/reauthenticate');
+
+        self::assertSame('admin.applications.index', session('identity.reauthentication_return_route'));
+        self::assertSame(0, AuthChallenge::query()->where('user_id', $user->id)->count());
+        $this->assertDatabaseMissing('applications', ['code' => 'blocked-create']);
+        $this->assertDatabaseHas('applications', [
+            'id' => $application->id,
+            'name' => 'Original',
+            'is_active' => true,
+        ]);
+        $this->get('/admin/applications')->assertOk();
+    }
+
+    public function test_application_mutation_succeeds_after_reauthentication_and_returns_to_the_get_landing_route(): void
+    {
+        $user = $this->actAsApplicationAdministrator(now()->subHour());
+
+        $this->post('/admin/applications', [
+            'code' => 'after-proof',
+            'name' => 'After proof',
+        ])->assertRedirect('/reauthenticate');
+        $this->post('/reauthenticate', ['return_route' => session('identity.reauthentication_return_route')])
+            ->assertRedirect('/reauthenticate');
+        AuthChallenge::query()->where('user_id', $user->id)->sole()->update(['delivered_at' => now()]);
+        $this->post('/reauthenticate/verify', ['code' => $this->queuedOtpCode()])
+            ->assertRedirect('/reauthenticate/mfa');
+        $this->withCookie((string) config('session.cookie'), $this->sessionStore()->getId());
+
+        $this->post('/reauthenticate/mfa', [
+            'code' => TOTP::createFromSecret($user->mfaMethods()->sole()->secret)->now(),
+        ])->assertRedirect('/admin/applications');
+        $this->withCookie((string) config('session.cookie'), $this->sessionStore()->getId());
+
+        $this->post('/admin/applications', [
+            'code' => 'after-proof',
+            'name' => 'After proof',
+        ])->assertRedirect('/admin/applications');
+        $this->assertDatabaseHas('applications', ['code' => 'after-proof']);
+    }
+
+    private function actAsApplicationAdministrator(mixed $reauthenticatedAt = true): User
     {
         $user = User::factory()->active()->create();
         $this->grant($user, 'admin.applications');
@@ -176,7 +236,7 @@ final class ApplicationAdministrationTest extends TestCase
             'secret' => 'TESTONLYSHAREDSECRET',
             'confirmed_at' => now(),
         ]);
-        $this->authenticate($user, now(), now());
+        $this->authenticate($user, now(), $reauthenticatedAt === true ? now() : $reauthenticatedAt);
         $this->actingAs($user);
 
         return $user;
@@ -229,5 +289,17 @@ final class ApplicationAdministrationTest extends TestCase
     private function sessionStore(): Session
     {
         return $this->app->make(Session::class);
+    }
+
+    private function queuedOtpCode(): string
+    {
+        /** @var array{data: array{command: string}} $payload */
+        $payload = json_decode((string) DB::table('jobs')->latest('id')->value('payload'), true, flags: JSON_THROW_ON_ERROR);
+        $serialized = $this->app->make(Encrypter::class)->decrypt($payload['data']['command']);
+        self::assertIsString($serialized);
+        $job = unserialize($serialized, ['allowed_classes' => true]);
+        self::assertInstanceOf(SendQueuedNotifications::class, $job);
+
+        return $job->notification->code;
     }
 }

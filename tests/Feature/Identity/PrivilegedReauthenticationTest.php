@@ -24,6 +24,23 @@ final class PrivilegedReauthenticationTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_guest_reauthentication_redirect_is_not_cacheable(): void
+    {
+        $this->get('/reauthenticate')
+            ->assertRedirect('/')
+            ->assertHeader('Cache-Control', 'no-store, private');
+    }
+
+    public function test_unmatched_reauthentication_and_sensitive_credential_responses_are_not_cacheable(): void
+    {
+        $this->get('/reauthenticate/not-a-route')
+            ->assertNotFound()
+            ->assertHeader('Cache-Control', 'no-store, private');
+        $this->get('/security/recovery-codes')
+            ->assertMethodNotAllowed()
+            ->assertHeader('Cache-Control', 'no-store, private');
+    }
+
     public function test_reauthentication_starts_only_after_an_explicit_post(): void
     {
         $user = User::factory()->active()->mfaConfirmed()->create();
@@ -52,6 +69,17 @@ final class PrivilegedReauthenticationTest extends TestCase
         $this->post('/reauthenticate')->assertRedirect()->assertSessionHasErrors('domain');
 
         self::assertSame(0, AuthChallenge::query()->count());
+    }
+
+    public function test_reauthentication_validation_response_is_not_cacheable(): void
+    {
+        $user = User::factory()->active()->mfaConfirmed()->create();
+        $this->authenticate($user, now()->subHour());
+
+        $this->post('/reauthenticate', ['return_route' => str_repeat('x', 151)])
+            ->assertRedirect()
+            ->assertSessionHasErrors('return_route')
+            ->assertHeader('Cache-Control', 'no-store, private');
     }
 
     public function test_removing_the_mfa_method_after_email_start_cannot_downgrade_reauthentication(): void
@@ -172,6 +200,16 @@ final class PrivilegedReauthenticationTest extends TestCase
 
         self::assertSame((int) config('identity.totp.recovery_code_count'), UserRecoveryCode::query()->count());
         $response->assertSee('They will not be shown again.');
+    }
+
+    public function test_sensitive_credential_error_response_is_not_cacheable(): void
+    {
+        $user = User::factory()->active()->create();
+        $this->authenticate($user, now());
+
+        $this->post('/security/recovery-codes')
+            ->assertNotFound()
+            ->assertHeader('Cache-Control', 'no-store, private');
     }
 
     public function test_rotation_sets_a_new_enrollment_age_anchor_as_well_as_rotated_at(): void
