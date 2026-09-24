@@ -10,6 +10,7 @@ use App\Contracts\Identity\TotpVerifier;
 use App\Domain\Identity\Enums\AuthenticationPurpose;
 use App\Domain\Identity\Enums\UserState;
 use App\Models\AuthChallenge;
+use App\Models\AuthSession;
 use App\Models\PendingAuthentication;
 use App\Models\User;
 use App\Models\UserRecoveryCode;
@@ -162,6 +163,21 @@ final class RecoveryCodeAuthenticationTest extends TestCase
     public function test_reauthentication_retains_mfa_after_business_privilege_is_removed(): void
     {
         $user = User::factory()->active()->mfaConfirmed()->create();
+        $sessionId = bin2hex(random_bytes(20));
+        $this->sessionStore()->start();
+        $this->sessionStore()->setId($sessionId);
+        AuthSession::query()->create([
+            'session_id' => $sessionId,
+            'user_id' => $user->id,
+            'started_at' => now(),
+            'last_seen_at' => now(),
+            'absolute_expires_at' => now()->addHour(),
+            'primary_authenticated_at' => now(),
+            'mfa_authenticated_at' => now(),
+            'user_session_version' => $user->session_version,
+        ]);
+        $this->actingAs($user);
+        $this->withCookie((string) config('session.cookie'), $sessionId);
         $provider = $this->app->make(PrimaryAuthenticationProvider::class);
         $begin = $provider->begin(
             $user->email,
@@ -185,10 +201,10 @@ final class RecoveryCodeAuthenticationTest extends TestCase
         self::assertTrue($completed->requiresAdditionalProof());
         self::assertNotNull($completed->pendingAuthentication);
         $this->withCookie((string) config('session.cookie'), $this->sessionStore()->getId());
-        $this->get('/login/mfa')->assertOk();
-        $this->post('/login/mfa', [
+        $this->get('/reauthenticate/mfa')->assertOk();
+        $this->post('/reauthenticate/mfa', [
             'code' => TOTP::createFromSecret($user->mfaMethods()->sole()->secret)->now(),
-        ])->assertRedirect('/');
+        ])->assertRedirect('/security');
         $this->assertAuthenticatedAs($user);
     }
 

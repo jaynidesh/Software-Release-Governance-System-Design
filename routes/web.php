@@ -6,11 +6,15 @@ use App\Http\Controllers\Foundation\WelcomeController;
 use App\Http\Controllers\Identity\ApplicationController;
 use App\Http\Controllers\Identity\ApplicationStateController;
 use App\Http\Controllers\Identity\Authentication\LoginController;
+use App\Http\Controllers\Identity\Authentication\LogoutController;
 use App\Http\Controllers\Identity\Authentication\OtpChallengeController;
 use App\Http\Controllers\Identity\Authentication\PendingAuthenticationCancellationController;
+use App\Http\Controllers\Identity\Authentication\ReauthenticationController;
 use App\Http\Controllers\Identity\Mfa\PendingMfaController;
 use App\Http\Controllers\Identity\Mfa\RecoveryCodeController;
 use App\Http\Controllers\Identity\Mfa\TotpEnrollmentController;
+use App\Http\Controllers\Identity\SecurityOverviewController;
+use App\Http\Controllers\Identity\SessionController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', WelcomeController::class)->name('home');
@@ -49,3 +53,27 @@ Route::middleware('auth')->prefix('admin')->name('admin.')->group(function (): v
     Route::patch('applications/{application}/state', ApplicationStateController::class)
         ->name('applications.state.update');
 });
+
+Route::middleware('auth')->prefix('security')->name('identity.')->group(function (): void {
+    Route::get('/', SecurityOverviewController::class)->name('security.index');
+    Route::post('/recovery-codes', [SecurityOverviewController::class, 'regenerateRecoveryCodes'])
+        ->middleware(['fresh.reauth', 'no-store.auth'])->name('security.recovery-codes.store');
+    Route::post('/totp', [SecurityOverviewController::class, 'rotateTotp'])
+        ->middleware(['fresh.reauth', 'no-store.auth'])->name('security.totp.store');
+    Route::delete('/sessions', [SessionController::class, 'destroyAll'])->name('sessions.destroy-all');
+    Route::delete('/sessions/{authSession}', [SessionController::class, 'destroy'])->name('sessions.destroy');
+});
+
+Route::middleware(['auth', 'no-store.auth'])->prefix('reauthenticate')->name('identity.reauthentication.')->group(function (): void {
+    Route::get('/', [ReauthenticationController::class, 'show'])->name('show');
+    Route::post('/', [ReauthenticationController::class, 'store'])->name('begin');
+    Route::post('/verify', [ReauthenticationController::class, 'verify'])->name('verify');
+    Route::get('/mfa', [ReauthenticationController::class, 'mfa'])
+        ->middleware('pending.auth:verify')->name('mfa.show');
+    Route::post('/mfa', [ReauthenticationController::class, 'complete'])
+        ->middleware('pending.auth:verify')->name('mfa.complete');
+});
+
+Route::post('/logout', LogoutController::class)
+    ->middleware(['auth', 'no-store.auth'])
+    ->name('logout');

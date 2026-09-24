@@ -55,11 +55,7 @@ final class RequirePendingAuthentication
         $actualStep = $this->nextStep($user);
 
         if ($actualStep !== $requiredStep) {
-            return $this->noStoreRedirect(match ($actualStep) {
-                'verify' => 'identity.mfa.verify.create',
-                'recovery' => 'identity.mfa.recovery.create',
-                default => 'identity.mfa.enroll.create',
-            });
+            return $this->noStoreRedirect($this->stepRoute($pending, $actualStep));
         }
 
         $request->attributes->set('identity.pending', $pending);
@@ -135,6 +131,19 @@ final class RequirePendingAuthentication
         $response->headers->set('Cache-Control', 'no-store, private');
 
         return $response;
+    }
+
+    private function stepRoute(PendingAuthentication $pending, string $actualStep): string
+    {
+        if ($this->purpose($pending) === AuthenticationPurpose::Reauthentication) {
+            return 'identity.reauthentication.mfa.show';
+        }
+
+        return match ($actualStep) {
+            'verify' => 'identity.mfa.verify.create',
+            'recovery' => 'identity.mfa.recovery.create',
+            default => 'identity.mfa.enroll.create',
+        };
     }
 
     private function purpose(PendingAuthentication $pending): AuthenticationPurpose

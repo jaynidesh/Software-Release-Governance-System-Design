@@ -218,7 +218,7 @@ final class AuthenticationPrivacyTest extends TestCase
         $this->get('/register')->assertNotFound();
         $this->get('/forgot-password')->assertNotFound();
         $this->get('/reset-password')->assertNotFound();
-        $this->get('/logout')->assertNotFound();
+        $this->get('/logout')->assertMethodNotAllowed();
         self::assertSame(0, AuthChallenge::query()->count());
     }
 

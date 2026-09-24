@@ -40,6 +40,7 @@ final class AuthorizationBoundaryTest extends TestCase
     public function test_transactional_action_reauthorizes_after_the_form_request_boundary(): void
     {
         $user = User::factory()->active()->create();
+        $this->authenticate($user);
         $this->actingAs($user);
         $authorization = new class implements AuthorizationService
         {

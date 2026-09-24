@@ -1,6 +1,9 @@
 <?php
 
 use App\Http\Middleware\AssignCorrelationId;
+use App\Http\Middleware\EnforceAuthenticatedSession;
+use App\Http\Middleware\NoStoreAuthenticationResponse;
+use App\Http\Middleware\RequireFreshReauthentication;
 use App\Http\Middleware\RequirePendingAuthentication;
 use App\Http\Middleware\SecurityHeaders;
 use App\Support\Exceptions\DomainRuleViolation;
@@ -20,7 +23,12 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->redirectGuestsTo(static fn (): string => route('home'));
         $middleware->prepend(AssignCorrelationId::class);
         $middleware->append(SecurityHeaders::class);
-        $middleware->alias(['pending.auth' => RequirePendingAuthentication::class]);
+        $middleware->appendToGroup('web', EnforceAuthenticatedSession::class);
+        $middleware->alias([
+            'fresh.reauth' => RequireFreshReauthentication::class,
+            'no-store.auth' => NoStoreAuthenticationResponse::class,
+            'pending.auth' => RequirePendingAuthentication::class,
+        ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $shouldRenderJson = static fn (Request $request): bool => $request->is('api/*') || $request->expectsJson();

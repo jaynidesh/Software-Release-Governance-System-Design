@@ -6,7 +6,12 @@
         <div class="d-flex align-items-center gap-3">
             <span class="navbar-text text-white-50">Controlled delivery from Development to Production</span>
             @auth
+                <a class="link-light" href="{{ route('identity.security.index') }}">Security</a>
                 <span class="navbar-text text-white">{{ auth()->user()->name }}</span>
+                <form method="POST" action="{{ route('logout') }}">
+                    @csrf
+                    <button class="btn btn-sm btn-outline-light" type="submit">Log out</button>
+                </form>
             @endauth
         </div>
     </div>

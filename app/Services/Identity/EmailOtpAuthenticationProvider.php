@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Services\Identity;
 
+use App\Application\Identity\Sessions\RekeyAuthenticatedSession;
+use App\Contracts\Identity\AuthenticatedSessionCreator;
 use App\Contracts\Identity\OtpDelivery;
 use App\Contracts\Identity\PrimaryAuthenticationProvider;
 use App\Domain\Identity\Data\BeginAuthentication;
@@ -13,8 +15,6 @@ use App\Domain\Identity\Enums\UserState;
 use App\Models\AuthChallenge;
 use App\Models\PendingAuthentication;
 use App\Models\User;
-use Illuminate\Auth\AuthManager;
-use Illuminate\Contracts\Auth\StatefulGuard;
 use Illuminate\Contracts\Session\Session;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -29,9 +29,10 @@ final class EmailOtpAuthenticationProvider implements PrimaryAuthenticationProvi
         private readonly IdentityEventRecorder $events,
         private readonly AccountLockout $lockout,
         private readonly Session $session,
-        private readonly AuthManager $auth,
         private readonly PrivilegedPermissionResolver $privilegedPermissions,
         private readonly TotpEnrollmentState $enrollmentState,
+        private readonly AuthenticatedSessionCreator $authenticatedSessions,
+        private readonly RekeyAuthenticatedSession $rekeyAuthenticatedSession,
     ) {}
 
     public function begin(
@@ -291,7 +292,23 @@ final class EmailOtpAuthenticationProvider implements PrimaryAuthenticationProvi
                 $correlationId,
             );
 
-            if ($this->privilegedPermissions->authenticationRequiresMfa($user, $purpose)) {
+            $requiresMfa = $this->privilegedPermissions->authenticationRequiresMfa($user, $purpose);
+
+            if ($purpose === AuthenticationPurpose::Reauthentication && ! $requiresMfa) {
+                $this->recordVerificationFailure(
+                    $user,
+                    $purpose,
+                    'OTP_VERIFICATION_REJECTED',
+                    $challengeReference,
+                    $ipAddress,
+                    $userAgent,
+                    $correlationId,
+                );
+
+                return null;
+            }
+
+            if ($requiresMfa) {
                 return $this->completePendingPrimary(
                     $user,
                     $challenge,
@@ -360,14 +377,7 @@ final class EmailOtpAuthenticationProvider implements PrimaryAuthenticationProvi
 
         $user->forceFill(['last_login_at' => now()])->save();
         $this->lockout->reset($user);
-        $guard = $this->auth->guard();
-
-        if (! $guard instanceof StatefulGuard) {
-            throw new \LogicException('The configured authentication guard must be stateful.');
-        }
-
-        $guard->login($user, false);
-        $this->session->forget(['identity.pending_authentication', 'identity.auth_challenge', 'identity.auth_purpose']);
+        $this->authenticatedSessions->create($user, $purpose, false);
         $this->events->login(
             $user->email,
             $purpose,
@@ -402,8 +412,12 @@ final class EmailOtpAuthenticationProvider implements PrimaryAuthenticationProvi
             $user->forceFill(['email_verified_at' => now()])->save();
         }
 
-        $this->session->invalidate();
-        $this->session->regenerateToken();
+        if ($purpose === AuthenticationPurpose::Reauthentication) {
+            $this->rekeyAuthenticatedSession->handle($user);
+        } else {
+            $this->session->invalidate();
+            $this->session->regenerateToken();
+        }
         $this->enrollmentState->discardProofFromEarlierPendingAuthentication($user);
         PendingAuthentication::query()
             ->where('user_id', $user->getKey())

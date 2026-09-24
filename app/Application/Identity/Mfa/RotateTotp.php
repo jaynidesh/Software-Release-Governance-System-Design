@@ -43,6 +43,7 @@ final class RotateTotp
                 'confirmed_at' => null,
                 'rotated_at' => now(),
                 'last_accepted_timestep' => null,
+                'created_at' => now(),
             ])->save();
             $lockedUser->increment('session_version');
             $this->events->security(
