@@ -54,4 +54,7 @@ return [
     'additional_privileged_permissions' => $additionalPrivilegedPermissions,
     'security_queue' => env('AUTH_SECURITY_QUEUE', 'security'),
     'event_retention_days' => (int) env('AUTH_EVENT_RETENTION_DAYS', 2555),
+    'administration' => [
+        'per_page' => (int) env('AUTH_ADMIN_PER_PAGE', 15),
+    ],
 ];

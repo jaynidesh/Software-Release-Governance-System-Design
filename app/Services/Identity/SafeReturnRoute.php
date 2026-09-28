@@ -13,6 +13,8 @@ final class SafeReturnRoute
         'home',
         'identity.security.index',
         'admin.applications.index',
+        'admin.users.index',
+        'admin.roles.index',
     ];
 
     public function resolve(?string $routeName): string

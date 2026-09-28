@@ -66,6 +66,7 @@ final class EnvironmentValidatorTest extends TestCase
             'known_permissions' => ['admin.users'],
             'queue_connection' => 'database', 'security_queue' => 'security',
             'event_retention_days' => 2555,
+            'admin_per_page' => 15,
         ];
     }
 }

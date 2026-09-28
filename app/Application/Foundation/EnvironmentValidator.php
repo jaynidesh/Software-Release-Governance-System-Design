@@ -74,6 +74,7 @@ final class EnvironmentValidator
         $this->validateRange($errors, $settings, 'unconfirmed_mfa_ttl_minutes', 'AUTH_UNCONFIRMED_MFA_TTL_MINUTES', 5, 120);
         $this->validateRange($errors, $settings, 'pending_auth_ttl_minutes', 'AUTH_PENDING_AUTH_TTL_MINUTES', 2, 15);
         $this->validateRange($errors, $settings, 'event_retention_days', 'AUTH_EVENT_RETENTION_DAYS', 365, 3650);
+        $this->validateRange($errors, $settings, 'admin_per_page', 'AUTH_ADMIN_PER_PAGE', 5, 100);
 
         $otpPepper = $settings['otp_pepper'] ?? null;
         if ($production && (! is_string($otpPepper) || strlen($otpPepper) < 32 || $this->appKeyMatchesPepper((string) ($settings['key'] ?? ''), $otpPepper))) {

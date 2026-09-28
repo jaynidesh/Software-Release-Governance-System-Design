@@ -13,6 +13,20 @@
                     </a>
                 </li>
             @endcan
+            @can('admin.users')
+                <li class="nav-item">
+                    <a class="nav-link" href="{{ route('admin.users.index') }}">
+                        <i class="bi bi-people me-2" aria-hidden="true"></i>Users
+                    </a>
+                </li>
+            @endcan
+            @can('admin.roles')
+                <li class="nav-item">
+                    <a class="nav-link" href="{{ route('admin.roles.index') }}">
+                        <i class="bi bi-shield-lock me-2" aria-hidden="true"></i>Roles
+                    </a>
+                </li>
+            @endcan
         </ul>
     </nav>
 </aside>

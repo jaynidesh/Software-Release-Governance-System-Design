@@ -58,6 +58,7 @@ final class ValidateEnvironmentCommand extends Command
                 'queue_connection' => config('queue.default'),
                 'security_queue' => config('identity.security_queue'),
                 'event_retention_days' => config('identity.event_retention_days'),
+                'admin_per_page' => config('identity.administration.per_page'),
             ]);
         } catch (InvalidEnvironmentConfiguration $exception) {
             foreach ($exception->errors as $error) {

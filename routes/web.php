@@ -10,11 +10,20 @@ use App\Http\Controllers\Identity\Authentication\LogoutController;
 use App\Http\Controllers\Identity\Authentication\OtpChallengeController;
 use App\Http\Controllers\Identity\Authentication\PendingAuthenticationCancellationController;
 use App\Http\Controllers\Identity\Authentication\ReauthenticationController;
+use App\Http\Controllers\Identity\InvitationController;
 use App\Http\Controllers\Identity\Mfa\PendingMfaController;
 use App\Http\Controllers\Identity\Mfa\RecoveryCodeController;
 use App\Http\Controllers\Identity\Mfa\TotpEnrollmentController;
+use App\Http\Controllers\Identity\RoleAssignmentController;
+use App\Http\Controllers\Identity\RoleController;
+use App\Http\Controllers\Identity\RolePermissionController;
 use App\Http\Controllers\Identity\SecurityOverviewController;
 use App\Http\Controllers\Identity\SessionController;
+use App\Http\Controllers\Identity\UserController;
+use App\Http\Controllers\Identity\UserMfaController;
+use App\Http\Controllers\Identity\UserSessionController;
+use App\Http\Controllers\Identity\UserStateController;
+use App\Http\Controllers\Identity\UserUnlockController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', WelcomeController::class)->name('home');
@@ -48,6 +57,37 @@ Route::middleware('guest')->group(function (): void {
 });
 
 Route::middleware('auth')->prefix('admin')->name('admin.')->group(function (): void {
+    Route::resource('users', UserController::class)
+        ->only(['index', 'create', 'store', 'show', 'edit', 'update'])
+        ->middlewareFor(['store', 'update'], 'fresh.reauth:admin.users.index');
+    Route::patch('users/{user}/state', UserStateController::class)
+        ->middleware('fresh.reauth:admin.users.index')->name('users.state.update');
+    Route::post('users/{user}/invitations', [InvitationController::class, 'store'])
+        ->middleware('fresh.reauth:admin.users.index')->name('users.invitations.store');
+    Route::delete('users/{user}/invitations', [InvitationController::class, 'destroy'])
+        ->middleware('fresh.reauth:admin.users.index')->name('users.invitations.destroy');
+    Route::post('users/{user}/unlock', [UserUnlockController::class, 'store'])
+        ->middleware('fresh.reauth:admin.users.index')->name('users.unlock.store');
+    Route::delete('users/{user}/sessions', [UserSessionController::class, 'destroy'])
+        ->middleware('fresh.reauth:admin.users.index')->name('users.sessions.destroy');
+    Route::delete('users/{user}/mfa', [UserMfaController::class, 'destroy'])
+        ->middleware('fresh.reauth:admin.users.index')->name('users.mfa.destroy');
+    Route::post('users/{user}/role-assignments', [RoleAssignmentController::class, 'store'])
+        ->middleware('fresh.reauth:admin.users.index')->name('users.role-assignments.store');
+    Route::delete(
+        'users/{user}/role-assignments/{roleAssignment}',
+        [RoleAssignmentController::class, 'destroy'],
+    )->scopeBindings()->middleware('fresh.reauth:admin.users.index')
+        ->name('users.role-assignments.destroy');
+
+    Route::resource('roles', RoleController::class)
+        ->only(['index', 'create', 'store', 'show', 'edit', 'update'])
+        ->middlewareFor(['store', 'update'], 'fresh.reauth:admin.roles.index');
+    Route::patch('roles/{role}/state', [RoleController::class, 'changeState'])
+        ->middleware('fresh.reauth:admin.roles.index')->name('roles.state.update');
+    Route::put('roles/{role}/permissions', [RolePermissionController::class, 'update'])
+        ->middleware('fresh.reauth:admin.roles.index')->name('roles.permissions.update');
+
     Route::resource('applications', ApplicationController::class)
         ->only(['index', 'create', 'store', 'edit', 'update'])
         ->middlewareFor(['store', 'update'], 'fresh.reauth:admin.applications.index');

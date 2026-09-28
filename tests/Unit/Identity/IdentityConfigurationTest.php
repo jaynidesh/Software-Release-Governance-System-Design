@@ -54,6 +54,9 @@ final class IdentityConfigurationTest extends TestCase
             'additional_privileged_permissions' => [],
             'security_queue' => 'security',
             'event_retention_days' => 2555,
+            'administration' => [
+                'per_page' => 15,
+            ],
         ], config('identity'));
     }
 
@@ -200,6 +203,7 @@ final class IdentityConfigurationTest extends TestCase
             'unconfirmed_mfa_ttl_minutes' => [5, 120],
             'pending_auth_ttl_minutes' => [2, 15],
             'event_retention_days' => [365, 3650],
+            'admin_per_page' => [5, 100],
         ];
     }
 
@@ -233,6 +237,7 @@ final class IdentityConfigurationTest extends TestCase
             ],
             'additional_privileged_permissions' => [], 'queue_connection' => 'database',
             'security_queue' => 'security', 'event_retention_days' => 2555,
+            'admin_per_page' => 15,
         ];
     }
 
