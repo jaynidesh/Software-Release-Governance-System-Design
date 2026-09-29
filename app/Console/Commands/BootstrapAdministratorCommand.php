@@ -7,6 +7,7 @@ namespace App\Console\Commands;
 use App\Domain\Identity\Enums\UserState;
 use App\Models\Role;
 use App\Models\RoleAssignment;
+use App\Models\SecurityEvent;
 use App\Models\User;
 use App\Notifications\Identity\ActivationInvitationNotification;
 use App\Services\Identity\IdentityEventRecorder;
@@ -63,6 +64,14 @@ final class BootstrapAdministratorCommand extends Command
                 ->where('code', 'administrator')
                 ->lockForUpdate()
                 ->firstOrFail();
+            $hasBootstrapHistory = SecurityEvent::query()
+                ->where('event_code', 'identity.administrator.bootstrapped')
+                ->exists();
+
+            if ($hasBootstrapHistory) {
+                return null;
+            }
+
             $exists = RoleAssignment::query()
                 ->where('role_id', $administrator->id)
                 ->whereNull('application_id')

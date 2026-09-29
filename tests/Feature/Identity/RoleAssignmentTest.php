@@ -181,8 +181,64 @@ final class RoleAssignmentTest extends TestCase
             'scope_type' => 'GLOBAL',
             'starts_at' => now()->toAtomString(),
         ])->assertRedirect('/reauthenticate');
-        self::assertSame('admin.users.index', session('identity.reauthentication_return_route'));
+        self::assertSame('admin.role-assignments.index', session('identity.reauthentication_return_route'));
         self::assertSame(0, RoleAssignment::query()->where('user_id', $target->id)->count());
+    }
+
+    public function test_role_only_administrator_has_a_focused_assignment_surface_and_safe_reauthentication_return(): void
+    {
+        $this->withoutVite();
+        $actor = User::factory()->active()->create();
+        $protector = User::factory()->active()->create();
+        RoleAssignment::factory()->create([
+            'user_id' => $protector->id,
+            'role_id' => Role::query()->where('code', 'administrator')->firstOrFail()->id,
+        ]);
+        $target = User::factory()->active()->create();
+        $role = Role::factory()->create();
+        $this->app->bind(AuthorizationService::class, fn () => new class implements AuthorizationService
+        {
+            public function allows(User $user, string $permission, ?Application $application, bool $requiresFreshReauthentication): bool
+            {
+                return $permission === 'admin.roles';
+            }
+        });
+        $session = $this->app->make(Session::class);
+        $sessionId = str_pad((string) $actor->id, 40, '9', STR_PAD_LEFT);
+        $session->setId($sessionId);
+        $this->withCookie((string) config('session.cookie'), $sessionId);
+        $authSession = AuthSession::query()->create([
+            'session_id' => $sessionId,
+            'user_id' => $actor->id,
+            'started_at' => now(),
+            'last_seen_at' => now(),
+            'absolute_expires_at' => now()->addHour(),
+            'primary_authenticated_at' => now(),
+            'mfa_authenticated_at' => now(),
+            'reauthenticated_at' => now()->subHour(),
+            'user_session_version' => $actor->session_version,
+        ]);
+        $this->actingAs($actor);
+
+        $this->get('/admin/role-assignments')
+            ->assertOk()
+            ->assertSee($target->name)
+            ->assertDontSee($target->email);
+        $this->post('/admin/users/'.$target->public_id.'/role-assignments', [
+            'role' => $role->public_id,
+            'scope_type' => 'GLOBAL',
+        ])->assertRedirect('/reauthenticate');
+        self::assertSame('admin.role-assignments.index', session('identity.reauthentication_return_route'));
+
+        $authSession->forceFill(['reauthenticated_at' => now()])->save();
+        $this->post('/admin/users/'.$target->public_id.'/role-assignments', [
+            'role' => $role->public_id,
+            'scope_type' => 'GLOBAL',
+        ])->assertRedirect();
+        $this->assertDatabaseHas('role_assignments', [
+            'user_id' => $target->id,
+            'role_id' => $role->id,
+        ]);
     }
 
     /** @param list<string> $allowed */

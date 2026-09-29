@@ -55,10 +55,6 @@ final class SyncRolePermissions
                 ->where('user_id', $lockedActor->id)
                 ->where('role_id', $lockedRole->id)
                 ->whereNull('revoked_at')
-                ->where('starts_at', '<=', now())
-                ->where(static function ($query): void {
-                    $query->whereNull('ends_at')->orWhere('ends_at', '>', now());
-                })
                 ->lockForUpdate()
                 ->exists();
 

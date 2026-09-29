@@ -36,8 +36,20 @@ final class ResendInvitation
             $userAgent,
             $correlationId,
         ): User {
-            $this->authorize($actor);
-            $lockedUser = User::query()->whereKey($user->getKey())->lockForUpdate()->firstOrFail();
+            $users = User::query()
+                ->whereKey([(int) $actor->getKey(), (int) $user->getKey()])
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get()
+                ->keyBy('id');
+            $lockedActor = $users->get($actor->getKey());
+            $lockedUser = $users->get($user->getKey());
+
+            if (! $lockedActor instanceof User || ! $lockedUser instanceof User) {
+                throw new AuthorizationException;
+            }
+
+            $this->authorize($lockedActor);
 
             if (UserState::from((string) $lockedUser->getRawOriginal('state')) !== UserState::Invited) {
                 throw new DomainRuleViolation(
@@ -53,7 +65,7 @@ final class ResendInvitation
             ])->save();
             $this->events->security(
                 'identity.invitation.resent',
-                $actor,
+                $lockedActor,
                 $lockedUser,
                 [],
                 $ipAddress,

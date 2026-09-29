@@ -25,4 +25,11 @@ final class SyncRolePermissionsRequest extends FormRequest
             'permissions.*' => ['required', 'string', 'distinct', Rule::exists(Permission::class, 'code')],
         ];
     }
+
+    protected function prepareForValidation(): void
+    {
+        if (! $this->has('permissions')) {
+            $this->merge(['permissions' => []]);
+        }
+    }
 }

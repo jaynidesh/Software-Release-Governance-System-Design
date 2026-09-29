@@ -127,6 +127,11 @@ final class CreateInvitedUser
                     $correlationId,
                 );
             }
+
+            if ($initialAssignments !== []) {
+                $this->administrators->assertAdministratorAssignmentsUnbounded($user);
+            }
+
             $this->events->security(
                 'identity.invitation.created',
                 $lockedActor,

@@ -92,6 +92,82 @@ final class RoleAdministrationTest extends TestCase
         $this->app->make(SyncRolePermissions::class)->handle($actor, $role, [], null, null, null);
     }
 
+    public function test_actor_cannot_compose_a_role_from_which_a_future_assignment_will_escalate_them(): void
+    {
+        $actor = User::factory()->active()->create();
+        $protector = User::factory()->active()->create();
+        RoleAssignment::factory()->create([
+            'user_id' => $protector->id,
+            'role_id' => Role::query()->where('code', 'administrator')->firstOrFail()->id,
+        ]);
+        $role = Role::factory()->create();
+        RoleAssignment::factory()->create([
+            'user_id' => $actor->id,
+            'role_id' => $role->id,
+            'starts_at' => now()->addDay(),
+        ]);
+        $this->allowRoles();
+
+        $this->expectException(DomainRuleViolation::class);
+        $this->app->make(SyncRolePermissions::class)->handle(
+            $actor,
+            $role,
+            [Permission::query()->where('code', 'admin.users')->firstOrFail()->id],
+            null,
+            null,
+            null,
+        );
+    }
+
+    public function test_actor_cannot_activate_a_role_with_a_future_assignment_to_them(): void
+    {
+        $actor = User::factory()->active()->create();
+        $protector = User::factory()->active()->create();
+        RoleAssignment::factory()->create([
+            'user_id' => $protector->id,
+            'role_id' => Role::query()->where('code', 'administrator')->firstOrFail()->id,
+        ]);
+        $role = Role::factory()->create(['is_active' => false]);
+        $role->permissions()->attach(Permission::query()->where('code', 'admin.users')->value('id'));
+        RoleAssignment::factory()->create([
+            'user_id' => $actor->id,
+            'role_id' => $role->id,
+            'starts_at' => now()->addDay(),
+        ]);
+        $this->allowRoles();
+
+        $this->expectException(DomainRuleViolation::class);
+        $this->app->make(ChangeRoleState::class)->handle($actor, $role, true, null, null, null);
+    }
+
+    public function test_browser_can_submit_an_empty_permission_composition(): void
+    {
+        $actor = User::factory()->active()->create();
+        $protector = User::factory()->active()->create();
+        RoleAssignment::factory()->create([
+            'user_id' => $protector->id,
+            'role_id' => Role::query()->where('code', 'administrator')->firstOrFail()->id,
+        ]);
+        $role = Role::factory()->create();
+        $role->permissions()->attach(Permission::query()->where('code', 'dashboard.view')->value('id'));
+        $this->app->bind(AuthorizationService::class, fn () => new class implements AuthorizationService
+        {
+            public function allows(User $user, string $permission, ?Application $application, bool $requiresFreshReauthentication): bool
+            {
+                return $permission === 'admin.roles';
+            }
+        });
+        $this->authenticateBrowser($actor, now());
+        $this->actingAs($actor);
+
+        $this->from(route('admin.roles.show', $role))
+            ->put(route('admin.roles.permissions.update', $role), [])
+            ->assertRedirect(route('admin.roles.show', $role))
+            ->assertSessionHasNoErrors();
+
+        self::assertSame(0, $role->permissions()->count());
+    }
+
     public function test_system_roles_cannot_be_deleted_but_non_administrator_system_roles_can_be_deactivated(): void
     {
         $actor = User::factory()->active()->create();
@@ -155,5 +231,24 @@ final class RoleAdministrationTest extends TestCase
                 return $permission === 'admin.roles' && $requiresFreshReauthentication;
             }
         });
+    }
+
+    private function authenticateBrowser(User $user, mixed $reauthenticatedAt): void
+    {
+        $session = $this->app->make(Session::class);
+        $sessionId = str_pad((string) $user->id, 40, '8', STR_PAD_LEFT);
+        $session->setId($sessionId);
+        $this->withCookie((string) config('session.cookie'), $sessionId);
+        AuthSession::query()->create([
+            'session_id' => $sessionId,
+            'user_id' => $user->id,
+            'started_at' => now(),
+            'last_seen_at' => now(),
+            'absolute_expires_at' => now()->addHour(),
+            'primary_authenticated_at' => now(),
+            'mfa_authenticated_at' => now(),
+            'reauthenticated_at' => $reauthenticatedAt,
+            'user_session_version' => $user->session_version,
+        ]);
     }
 }

@@ -6,6 +6,10 @@ namespace Tests\Feature\Identity;
 
 use App\Application\Identity\Users\ChangeUserState;
 use App\Application\Identity\Users\CreateInvitedUser;
+use App\Application\Identity\Users\ResendInvitation;
+use App\Application\Identity\Users\RevokeInvitation;
+use App\Application\Identity\Users\RevokeUserSessions;
+use App\Application\Identity\Users\UnlockUser;
 use App\Application\Identity\Users\UpdateUser;
 use App\Contracts\Identity\AuthorizationService;
 use App\Domain\Identity\Enums\UserState;
@@ -191,6 +195,113 @@ final class UserAdministrationTest extends TestCase
         self::assertSame(UserState::Invited, $target->refresh()->state);
         self::assertNotNull($target->invitation_expires_at);
         Notification::assertSentTo($target, ActivationInvitationNotification::class);
+    }
+
+    public function test_unactivated_user_cannot_become_active_through_an_intermediate_suspension(): void
+    {
+        Notification::fake();
+        $actor = User::factory()->active()->create();
+        RoleAssignment::factory()->create([
+            'user_id' => $actor->id,
+            'role_id' => Role::query()->where('code', 'administrator')->firstOrFail()->id,
+        ]);
+        $target = User::factory()->invited()->create();
+        $this->app->bind(AuthorizationService::class, fn () => $this->authorization(['admin.users']));
+
+        $action = $this->app->make(ChangeUserState::class);
+        $action->handle($actor, $target, UserState::Suspended, null, null, null);
+        $action->handle($actor, $target, UserState::Active, null, null, null);
+
+        self::assertSame(UserState::Invited, $target->refresh()->state);
+        self::assertNull($target->email_verified_at);
+        self::assertNull($target->activated_at);
+        Notification::assertSentTo($target, ActivationInvitationNotification::class);
+    }
+
+    public function test_deactivated_user_cannot_become_active_through_an_intermediate_suspension(): void
+    {
+        Notification::fake();
+        $actor = User::factory()->active()->create();
+        RoleAssignment::factory()->create([
+            'user_id' => $actor->id,
+            'role_id' => Role::query()->where('code', 'administrator')->firstOrFail()->id,
+        ]);
+        $target = User::factory()->deactivated()->create();
+        $this->app->bind(AuthorizationService::class, fn () => $this->authorization(['admin.users']));
+
+        $action = $this->app->make(ChangeUserState::class);
+        $action->handle($actor, $target, UserState::Suspended, null, null, null);
+        $action->handle($actor, $target, UserState::Active, null, null, null);
+
+        self::assertSame(UserState::Invited, $target->refresh()->state);
+        self::assertNull($target->email_verified_at);
+        self::assertNull($target->activated_at);
+        Notification::assertSentTo($target, ActivationInvitationNotification::class);
+    }
+
+    public function test_action_boundary_rejects_direct_transition_to_invited(): void
+    {
+        $actor = User::factory()->active()->create();
+        RoleAssignment::factory()->create([
+            'user_id' => $actor->id,
+            'role_id' => Role::query()->where('code', 'administrator')->firstOrFail()->id,
+        ]);
+        $target = User::factory()->active()->create();
+        $this->app->bind(AuthorizationService::class, fn () => $this->authorization(['admin.users']));
+
+        $this->expectException(DomainRuleViolation::class);
+        $this->app->make(ChangeUserState::class)->handle(
+            $actor,
+            $target,
+            UserState::Invited,
+            null,
+            null,
+            null,
+        );
+    }
+
+    public function test_invitation_and_unlock_actions_reauthorize_the_locked_actor(): void
+    {
+        Notification::fake();
+        $this->app->bind(AuthorizationService::class, fn () => new class implements AuthorizationService
+        {
+            public function allows(User $user, string $permission, ?Application $application, bool $requiresFreshReauthentication): bool
+            {
+                return $permission === 'admin.users'
+                    && $requiresFreshReauthentication
+                    && $user->state === UserState::Active;
+            }
+        });
+
+        foreach ([ResendInvitation::class, RevokeInvitation::class, UnlockUser::class] as $actionClass) {
+            $actor = User::factory()->active()->create();
+            $target = $actionClass === UnlockUser::class
+                ? User::factory()->locked()->create()
+                : User::factory()->invited()->create();
+            User::query()->whereKey($actor->id)->update(['state' => UserState::Suspended->value]);
+
+            try {
+                $this->app->make($actionClass)->handle($actor, $target, null, null, null);
+                self::fail($actionClass.' trusted stale actor authorization.');
+            } catch (AuthorizationException) {
+                self::assertTrue(true);
+            }
+        }
+
+        Notification::assertNothingSent();
+    }
+
+    public function test_administrative_session_revocation_requires_admin_users_even_for_self_target(): void
+    {
+        $actor = User::factory()->active()->create(['session_version' => 9]);
+        $this->app->bind(AuthorizationService::class, fn () => $this->authorization([]));
+
+        try {
+            $this->app->make(RevokeUserSessions::class)->handle($actor, $actor, null, null, null);
+            self::fail('The administrative wrapper used the self-service authorization bypass.');
+        } catch (AuthorizationException) {
+            self::assertSame(9, $actor->refresh()->session_version);
+        }
     }
 
     public function test_user_pages_are_authorized_paginated_and_mutations_use_a_safe_freshness_landing(): void

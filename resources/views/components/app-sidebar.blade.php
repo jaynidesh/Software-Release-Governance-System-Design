@@ -26,6 +26,11 @@
                         <i class="bi bi-shield-lock me-2" aria-hidden="true"></i>Roles
                     </a>
                 </li>
+                <li class="nav-item">
+                    <a class="nav-link" href="{{ route('admin.role-assignments.index') }}">
+                        <i class="bi bi-person-badge me-2" aria-hidden="true"></i>Role assignments
+                    </a>
+                </li>
             @endcan
         </ul>
     </nav>

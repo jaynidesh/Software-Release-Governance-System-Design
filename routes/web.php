@@ -15,6 +15,7 @@ use App\Http\Controllers\Identity\Mfa\PendingMfaController;
 use App\Http\Controllers\Identity\Mfa\RecoveryCodeController;
 use App\Http\Controllers\Identity\Mfa\TotpEnrollmentController;
 use App\Http\Controllers\Identity\RoleAssignmentController;
+use App\Http\Controllers\Identity\RoleAssignmentManagementController;
 use App\Http\Controllers\Identity\RoleController;
 use App\Http\Controllers\Identity\RolePermissionController;
 use App\Http\Controllers\Identity\SecurityOverviewController;
@@ -57,6 +58,8 @@ Route::middleware('guest')->group(function (): void {
 });
 
 Route::middleware('auth')->prefix('admin')->name('admin.')->group(function (): void {
+    Route::get('role-assignments', RoleAssignmentManagementController::class)
+        ->name('role-assignments.index');
     Route::resource('users', UserController::class)
         ->only(['index', 'create', 'store', 'show', 'edit', 'update'])
         ->middlewareFor(['store', 'update'], 'fresh.reauth:admin.users.index');
@@ -73,11 +76,11 @@ Route::middleware('auth')->prefix('admin')->name('admin.')->group(function (): v
     Route::delete('users/{user}/mfa', [UserMfaController::class, 'destroy'])
         ->middleware('fresh.reauth:admin.users.index')->name('users.mfa.destroy');
     Route::post('users/{user}/role-assignments', [RoleAssignmentController::class, 'store'])
-        ->middleware('fresh.reauth:admin.users.index')->name('users.role-assignments.store');
+        ->middleware('fresh.reauth:admin.role-assignments.index')->name('users.role-assignments.store');
     Route::delete(
         'users/{user}/role-assignments/{roleAssignment}',
         [RoleAssignmentController::class, 'destroy'],
-    )->scopeBindings()->middleware('fresh.reauth:admin.users.index')
+    )->scopeBindings()->middleware('fresh.reauth:admin.role-assignments.index')
         ->name('users.role-assignments.destroy');
 
     Route::resource('roles', RoleController::class)

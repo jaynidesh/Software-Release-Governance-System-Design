@@ -11,6 +11,7 @@ use App\Models\User;
 use App\Services\Identity\EffectiveAdministratorGuard;
 use App\Services\Identity\IdentityEventRecorder;
 use App\Services\Identity\PrivilegeChangeInvalidator;
+use App\Support\Exceptions\DomainRuleViolation;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Support\Facades\DB;
 
@@ -47,6 +48,20 @@ final class ChangeRoleState
             }
 
             $lockedRole = Role::query()->whereKey($role->getKey())->lockForUpdate()->firstOrFail();
+
+            if ($isActive && ! $lockedRole->is_active
+                && $lockedRole->permissions()->exists()
+                && RoleAssignment::query()
+                    ->where('user_id', $lockedActor->id)
+                    ->where('role_id', $lockedRole->id)
+                    ->whereNull('revoked_at')
+                    ->lockForUpdate()
+                    ->exists()) {
+                throw new DomainRuleViolation(
+                    'actor_assigned_role_activation',
+                    ['A different administrator must activate a role assigned to you.'],
+                );
+            }
 
             $userIds = RoleAssignment::query()
                 ->where('role_id', $lockedRole->id)

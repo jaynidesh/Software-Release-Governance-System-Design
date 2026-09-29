@@ -9,8 +9,10 @@ use App\Models\Role;
 use App\Models\RoleAssignment;
 use App\Models\User;
 use App\Support\Exceptions\DomainRuleViolation;
+use Carbon\CarbonInterface;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use LogicException;
 
 final class EffectiveAdministratorGuard
 {
@@ -44,6 +46,8 @@ final class EffectiveAdministratorGuard
             ->keyBy('id');
         $users = User::query()
             ->where('state', UserState::Active)
+            ->whereNotNull('email_verified_at')
+            ->whereNotNull('activated_at')
             ->orderBy('id')
             ->lockForUpdate()
             ->get()
@@ -79,6 +83,66 @@ final class EffectiveAdministratorGuard
             'last_effective_administrator',
             ['The final effective administrator cannot be made ineffective.'],
         );
+    }
+
+    public function assertAdministratorAssignmentsUnbounded(User $user): void
+    {
+        $assignments = RoleAssignment::query()
+            ->where('user_id', $user->getKey())
+            ->whereNull('application_id')
+            ->whereNull('revoked_at')
+            ->whereHas('role', static fn ($query) => $query->where('is_active', true))
+            ->with(['role.permissions' => static function ($query): void {
+                $query->whereIn('code', ['admin.users', 'admin.roles']);
+            }])
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->get();
+
+        foreach ($assignments as $assignment) {
+            [$startsAt, $endsAt, $role] = $this->assignmentState($assignment);
+
+            if (! $startsAt->isFuture() && $endsAt === null) {
+                continue;
+            }
+
+            $assignmentCodes = $role->permissions->pluck('code');
+
+            foreach ($assignments as $other) {
+                [$otherStartsAt, $otherEndsAt, $otherRole] = $this->assignmentState($other);
+                $overlaps = ($endsAt === null || $otherStartsAt->lt($endsAt))
+                    && ($otherEndsAt === null || $startsAt->lt($otherEndsAt));
+
+                if (! $overlaps) {
+                    continue;
+                }
+
+                $codes = $assignmentCodes->merge($otherRole->permissions->pluck('code'))->unique();
+
+                if ($codes->contains('admin.users') && $codes->contains('admin.roles')) {
+                    throw new DomainRuleViolation(
+                        'bounded_effective_administrator_assignment',
+                        ['Effective administrator assignments must begin immediately and cannot expire.'],
+                    );
+                }
+            }
+        }
+    }
+
+    /** @return array{CarbonInterface, CarbonInterface|null, Role} */
+    private function assignmentState(RoleAssignment $assignment): array
+    {
+        $startsAt = $assignment->getAttribute('starts_at');
+        $endsAt = $assignment->getAttribute('ends_at');
+        $role = $assignment->getRelation('role');
+
+        if (! $startsAt instanceof CarbonInterface
+            || ($endsAt !== null && ! $endsAt instanceof CarbonInterface)
+            || ! $role instanceof Role) {
+            throw new LogicException('Administrator assignment state was not hydrated correctly.');
+        }
+
+        return [$startsAt, $endsAt, $role];
     }
 
     /**

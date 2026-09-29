@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Tests\Feature\Identity;
 
 use App\Domain\Identity\Enums\UserState;
+use App\Models\Permission;
+use App\Models\Role;
 use App\Models\RoleAssignment;
 use App\Models\User;
 use App\Notifications\Identity\ActivationInvitationNotification;
@@ -60,5 +62,57 @@ final class BootstrapAdministratorCommandTest extends TestCase
             ->expectsOutputToContain('already exists')
             ->assertFailed();
         self::assertSame(1, User::query()->count());
+    }
+
+    public function test_bootstrap_refuses_after_first_use_even_when_the_original_canonical_grant_is_no_longer_current(): void
+    {
+        Notification::fake();
+        $this->seed(IdentityAuthorizationSeeder::class);
+        $this->artisan('identity:bootstrap-admin')
+            ->expectsQuestion('Employee number (optional)', '')
+            ->expectsQuestion('Name', 'Initial')
+            ->expectsQuestion('Email', 'initial@example.test')
+            ->expectsQuestion('Timezone', 'UTC')
+            ->assertSuccessful();
+
+        $initial = User::query()->where('email', 'initial@example.test')->firstOrFail();
+        $assignment = RoleAssignment::query()->where('user_id', $initial->id)->firstOrFail();
+
+        $assignment->forceFill(['revoked_at' => now()])->save();
+        $this->assertBootstrapHistoryRefuses('after-revoke@example.test');
+
+        $assignment->forceFill(['revoked_at' => null, 'ends_at' => now()->subSecond()])->save();
+        $this->assertBootstrapHistoryRefuses('after-expiry@example.test');
+
+        $initial->forceFill(['state' => UserState::Deactivated])->save();
+        $this->assertBootstrapHistoryRefuses('after-deactivation@example.test');
+
+        $custom = Role::factory()->create();
+        $custom->permissions()->attach(Permission::query()
+            ->whereIn('code', ['admin.users', 'admin.roles'])
+            ->pluck('id'));
+        $initial->forceFill([
+            'state' => UserState::Active,
+            'email_verified_at' => now(),
+            'activated_at' => now(),
+        ])->save();
+        RoleAssignment::factory()->create([
+            'user_id' => $initial->id,
+            'role_id' => $custom->id,
+        ]);
+        $this->assertBootstrapHistoryRefuses('after-transfer@example.test');
+
+        self::assertSame(1, User::query()->count());
+    }
+
+    private function assertBootstrapHistoryRefuses(string $email): void
+    {
+        $this->artisan('identity:bootstrap-admin')
+            ->expectsQuestion('Employee number (optional)', '')
+            ->expectsQuestion('Name', 'Replacement')
+            ->expectsQuestion('Email', $email)
+            ->expectsQuestion('Timezone', 'UTC')
+            ->expectsOutputToContain('already')
+            ->assertFailed();
     }
 }

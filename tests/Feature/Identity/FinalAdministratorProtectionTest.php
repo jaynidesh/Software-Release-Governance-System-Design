@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature\Identity;
 
+use App\Application\Identity\Assignments\AssignRole;
 use App\Application\Identity\Assignments\RevokeRoleAssignment;
 use App\Application\Identity\Roles\ChangeRoleState;
 use App\Application\Identity\Roles\SyncRolePermissions;
@@ -11,6 +12,7 @@ use App\Application\Identity\Users\ChangeUserState;
 use App\Contracts\Identity\AuthorizationService;
 use App\Domain\Identity\Enums\UserState;
 use App\Models\Application;
+use App\Models\Permission;
 use App\Models\Role;
 use App\Models\RoleAssignment;
 use App\Models\User;
@@ -64,5 +66,63 @@ final class FinalAdministratorProtectionTest extends TestCase
         self::assertNull($assignment->refresh()->revoked_at);
         self::assertTrue($administrator->refresh()->is_active);
         $this->assertDatabaseHas('security_events', ['event_code' => 'identity.administrator.last_protected']);
+    }
+
+    public function test_reassigning_one_half_of_a_split_administrator_to_the_future_is_rolled_back(): void
+    {
+        $actor = User::factory()->active()->create();
+        $target = User::factory()->active()->create();
+        $usersRole = Role::factory()->create();
+        $rolesRole = Role::factory()->create();
+        $usersRole->permissions()->attach(Permission::query()->where('code', 'admin.users')->value('id'));
+        $rolesRole->permissions()->attach(Permission::query()->where('code', 'admin.roles')->value('id'));
+        RoleAssignment::factory()->create(['user_id' => $target->id, 'role_id' => $usersRole->id]);
+        $assignment = RoleAssignment::factory()->create(['user_id' => $target->id, 'role_id' => $rolesRole->id]);
+        $originalStart = $assignment->starts_at;
+
+        try {
+            $this->app->make(AssignRole::class)->handle(
+                $actor,
+                $target,
+                $rolesRole,
+                null,
+                now()->addHour(),
+                null,
+                null,
+                null,
+                null,
+            );
+            self::fail('The final split-role administrator was rescheduled.');
+        } catch (DomainRuleViolation $exception) {
+            self::assertContains($exception->ruleCode, [
+                'bounded_effective_administrator_assignment',
+                'last_effective_administrator',
+            ]);
+        }
+
+        self::assertTrue($assignment->refresh()->starts_at->equalTo($originalStart));
+    }
+
+    public function test_unactivated_active_record_does_not_satisfy_the_effective_administrator_invariant(): void
+    {
+        $actor = User::factory()->active()->create();
+        $target = User::factory()->active()->create();
+        $unactivated = User::factory()->active()->create([
+            'email_verified_at' => null,
+            'activated_at' => null,
+        ]);
+        $administrator = Role::query()->where('code', 'administrator')->firstOrFail();
+        RoleAssignment::factory()->create(['user_id' => $target->id, 'role_id' => $administrator->id]);
+        RoleAssignment::factory()->create(['user_id' => $unactivated->id, 'role_id' => $administrator->id]);
+
+        $this->expectException(DomainRuleViolation::class);
+        $this->app->make(ChangeUserState::class)->handle(
+            $actor,
+            $target,
+            UserState::Deactivated,
+            null,
+            null,
+            null,
+        );
     }
 }

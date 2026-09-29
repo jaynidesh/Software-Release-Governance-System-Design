@@ -15,6 +15,7 @@ final class SafeReturnRoute
         'admin.applications.index',
         'admin.users.index',
         'admin.roles.index',
+        'admin.role-assignments.index',
     ];
 
     public function resolve(?string $routeName): string

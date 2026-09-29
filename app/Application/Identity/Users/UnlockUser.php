@@ -34,15 +34,27 @@ final class UnlockUser
             $userAgent,
             $correlationId,
         ): User {
-            $this->authorize($actor);
-            $lockedUser = User::query()->whereKey($user->getKey())->lockForUpdate()->firstOrFail();
+            $users = User::query()
+                ->whereKey([(int) $actor->getKey(), (int) $user->getKey()])
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get()
+                ->keyBy('id');
+            $lockedActor = $users->get($actor->getKey());
+            $lockedUser = $users->get($user->getKey());
+
+            if (! $lockedActor instanceof User || ! $lockedUser instanceof User) {
+                throw new AuthorizationException;
+            }
+
+            $this->authorize($lockedActor);
             $this->lockout->reset($lockedUser);
             $this->lockout->invalidateAuthenticationState($lockedUser);
             $lockedUser->increment('session_version');
             $lockedUser->refresh();
             $this->events->security(
                 'identity.account.unlocked',
-                $actor,
+                $lockedActor,
                 $lockedUser,
                 [],
                 $ipAddress,

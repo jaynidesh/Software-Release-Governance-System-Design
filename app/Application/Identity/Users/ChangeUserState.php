@@ -57,6 +57,13 @@ final class ChangeUserState
 
             $currentState = UserState::from((string) $lockedTarget->getRawOriginal('state'));
 
+            if ($state === UserState::Invited) {
+                throw new DomainRuleViolation(
+                    'administrator_invitation_transition_forbidden',
+                    ['Invitation state is managed by activation and reactivation workflows.'],
+                );
+            }
+
             if ($currentState === UserState::Invited && $state === UserState::Active) {
                 throw new DomainRuleViolation(
                     'invitation_activation_requires_otp',
@@ -64,10 +71,20 @@ final class ChangeUserState
                 );
             }
 
-            $effectiveState = $currentState === UserState::Deactivated && $state === UserState::Active
+            $requiresActivation = $currentState === UserState::Deactivated
+                || $lockedTarget->email_verified_at === null
+                || $lockedTarget->activated_at === null;
+            $effectiveState = $state === UserState::Active && $requiresActivation
                 ? UserState::Invited
                 : $state;
             $attributes = ['state' => $effectiveState];
+
+            if ($currentState === UserState::Deactivated || $effectiveState === UserState::Deactivated) {
+                $attributes += [
+                    'email_verified_at' => null,
+                    'activated_at' => null,
+                ];
+            }
 
             if ($effectiveState === UserState::Invited) {
                 $attributes += [

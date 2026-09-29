@@ -116,6 +116,7 @@ final class AssignRole
                 'role_id' => $lockedRole->id,
                 'application_id' => $lockedApplication?->id,
             ]);
+            $updatesExistingAssignment = $assignment->exists;
             $assignment->forceFill([
                 'starts_at' => $startsAt,
                 'ends_at' => $endsAt,
@@ -123,6 +124,17 @@ final class AssignRole
                 'assigned_by' => $lockedActor->id,
                 'revoked_by' => null,
             ])->save();
+            $this->administrators->assertAdministratorAssignmentsUnbounded($lockedTarget);
+
+            if ($updatesExistingAssignment) {
+                $this->administrators->assertExists(
+                    $lockedActor,
+                    $lockedTarget,
+                    $ipAddress,
+                    $userAgent,
+                    $correlationId,
+                );
+            }
 
             $this->invalidator->invalidate($lockedTarget);
             $this->events->security(
