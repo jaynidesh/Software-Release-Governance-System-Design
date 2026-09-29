@@ -203,6 +203,71 @@ final class AdministratorConcurrencyTest extends TestCase
         $this->assertSplitPermissionUnion($target->id, $usersRole->id, $rolesRole->id);
     }
 
+    public function test_two_valid_assignment_reductions_overlap_and_only_one_commits(): void
+    {
+        $actor = $this->realAuthorizationActor('admin.roles');
+        [$first, $second, $firstRole, $secondRole, $firstAssignment, $secondAssignment]
+            = $this->twoEffectiveAdministrators();
+        $results = $this->runWhileAdministratorMutexHeld([
+            fn (string $path): never => $this->runAssignmentRevocation($path, $actor->id, $firstAssignment->id),
+            fn (string $path): never => $this->runAssignmentRevocation($path, $actor->id, $secondAssignment->id),
+        ]);
+        sort($results);
+
+        self::assertSame(['protected', 'success'], $results);
+        DB::purge();
+        DB::reconnect();
+        $this->assertOneEffectiveAdministratorSurvives([$first->id, $second->id], [$firstRole->id, $secondRole->id]);
+    }
+
+    public function test_two_valid_role_state_reductions_overlap_and_only_one_commits(): void
+    {
+        $actor = $this->realAuthorizationActor('admin.roles');
+        [$first, $second, $firstRole, $secondRole] = $this->twoEffectiveAdministrators();
+        $results = $this->runWhileAdministratorMutexHeld([
+            fn (string $path): never => $this->runRoleStateChange($path, $actor->id, $firstRole->id),
+            fn (string $path): never => $this->runRoleStateChange($path, $actor->id, $secondRole->id),
+        ]);
+        sort($results);
+
+        self::assertSame(['protected', 'success'], $results);
+        DB::purge();
+        DB::reconnect();
+        $this->assertOneEffectiveAdministratorSurvives([$first->id, $second->id], [$firstRole->id, $secondRole->id]);
+    }
+
+    public function test_two_valid_permission_reductions_overlap_and_only_one_commits(): void
+    {
+        $actor = $this->realAuthorizationActor('admin.roles');
+        [$first, $second, $firstRole, $secondRole] = $this->twoEffectiveAdministrators();
+        $results = $this->runWhileAdministratorMutexHeld([
+            fn (string $path): never => $this->runPermissionRemoval($path, $actor->id, $firstRole->id),
+            fn (string $path): never => $this->runPermissionRemoval($path, $actor->id, $secondRole->id),
+        ]);
+        sort($results);
+
+        self::assertSame(['protected', 'success'], $results);
+        DB::purge();
+        DB::reconnect();
+        $this->assertOneEffectiveAdministratorSurvives([$first->id, $second->id], [$firstRole->id, $secondRole->id]);
+    }
+
+    public function test_valid_assignment_and_role_reductions_overlap_and_only_one_commits(): void
+    {
+        $actor = $this->realAuthorizationActor('admin.roles');
+        [$first, $second, $firstRole, $secondRole, $firstAssignment] = $this->twoEffectiveAdministrators();
+        $results = $this->runWhileAdministratorMutexHeld([
+            fn (string $path): never => $this->runAssignmentRevocation($path, $actor->id, $firstAssignment->id),
+            fn (string $path): never => $this->runRoleStateChange($path, $actor->id, $secondRole->id),
+        ]);
+        sort($results);
+
+        self::assertSame(['protected', 'success'], $results);
+        DB::purge();
+        DB::reconnect();
+        $this->assertOneEffectiveAdministratorSurvives([$first->id, $second->id], [$firstRole->id, $secondRole->id]);
+    }
+
     public function test_bootstrap_history_is_serialized_even_after_the_original_grant_is_revoked(): void
     {
         $this->runBootstrapInline('initial-history@example.test');
@@ -302,6 +367,30 @@ final class AdministratorConcurrencyTest extends TestCase
         ]);
 
         return [$target, $usersRole, $rolesRole, $rolesAssignment];
+    }
+
+    /** @return array{User, User, Role, Role, RoleAssignment, RoleAssignment} */
+    private function twoEffectiveAdministrators(): array
+    {
+        $first = User::factory()->active()->create();
+        $second = User::factory()->active()->create();
+        $firstRole = Role::factory()->create();
+        $secondRole = Role::factory()->create();
+        $adminPermissionIds = Permission::query()
+            ->whereIn('code', ['admin.users', 'admin.roles'])
+            ->pluck('id');
+        $firstRole->permissions()->attach($adminPermissionIds);
+        $secondRole->permissions()->attach($adminPermissionIds);
+        $firstAssignment = RoleAssignment::factory()->create([
+            'user_id' => $first->id,
+            'role_id' => $firstRole->id,
+        ]);
+        $secondAssignment = RoleAssignment::factory()->create([
+            'user_id' => $second->id,
+            'role_id' => $secondRole->id,
+        ]);
+
+        return [$first, $second, $firstRole, $secondRole, $firstAssignment, $secondAssignment];
     }
 
     private function realAuthorizationActor(string $permissionCode): User
@@ -518,6 +607,27 @@ final class AdministratorConcurrencyTest extends TestCase
         self::assertSame(0, $tester->execute([], ['interactive' => true]));
     }
 
+    private function runAssignmentRevocation(string $path, int $actorId, int $assignmentId): never
+    {
+        try {
+            $this->useRealAuthorization();
+            $this->app->make(RevokeRoleAssignment::class)->handle(
+                User::query()->findOrFail($actorId),
+                RoleAssignment::query()->findOrFail($assignmentId),
+                null,
+                null,
+                null,
+            );
+            file_put_contents($path, 'success');
+        } catch (DomainRuleViolation) {
+            file_put_contents($path, 'protected');
+        } catch (Throwable $exception) {
+            file_put_contents($path, 'error:'.$exception::class.':'.$exception->getMessage());
+        }
+
+        exit(0);
+    }
+
     private function runAssignmentReschedule(
         string $path,
         int $actorId,
@@ -537,7 +647,7 @@ final class AdministratorConcurrencyTest extends TestCase
                 null,
                 null,
             );
-            file_put_contents($path, 'lost');
+            file_put_contents($path, 'success');
         } catch (DomainRuleViolation) {
             file_put_contents($path, 'protected');
         } catch (Throwable $exception) {
@@ -559,7 +669,7 @@ final class AdministratorConcurrencyTest extends TestCase
                 null,
                 null,
             );
-            file_put_contents($path, 'lost');
+            file_put_contents($path, 'success');
         } catch (DomainRuleViolation) {
             file_put_contents($path, 'protected');
         } catch (Throwable $exception) {
@@ -581,7 +691,7 @@ final class AdministratorConcurrencyTest extends TestCase
                 null,
                 null,
             );
-            file_put_contents($path, 'lost');
+            file_put_contents($path, 'success');
         } catch (DomainRuleViolation) {
             file_put_contents($path, 'protected');
         } catch (Throwable $exception) {
@@ -638,6 +748,38 @@ final class AdministratorConcurrencyTest extends TestCase
                 $query->whereNull('ends_at')->orWhere('ends_at', '>', now());
             })
             ->count());
+    }
+
+    /**
+     * @param  array{int, int}  $userIds
+     * @param  array{int, int}  $roleIds
+     */
+    private function assertOneEffectiveAdministratorSurvives(array $userIds, array $roleIds): void
+    {
+        $assignments = RoleAssignment::query()
+            ->whereIn('user_id', $userIds)
+            ->whereIn('role_id', $roleIds)
+            ->whereNull('application_id')
+            ->whereNull('revoked_at')
+            ->where('starts_at', '<=', now())
+            ->where(static function ($query): void {
+                $query->whereNull('ends_at')->orWhere('ends_at', '>', now());
+            })
+            ->with('role.permissions')
+            ->get();
+        $effective = $assignments->filter(static function (RoleAssignment $assignment): bool {
+            if ($assignment->role?->is_active !== true) {
+                return false;
+            }
+
+            $codes = $assignment->role->permissions->pluck('code');
+
+            return $codes->contains('admin.users') && $codes->contains('admin.roles');
+        });
+
+        self::assertCount(1, $effective);
+        self::assertContains($effective->sole()->user_id, $userIds);
+        self::assertContains($effective->sole()->role_id, $roleIds);
     }
 
     private function runStateChange(string $path, int $actorId, int $targetId): never

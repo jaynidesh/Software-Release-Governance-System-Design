@@ -107,8 +107,13 @@ final class EffectiveAdministratorGuard
             }
 
             $assignmentCodes = $role->permissions->pluck('code');
+            $overlappingCodes = collect();
 
             foreach ($assignments as $other) {
+                if ($other->is($assignment)) {
+                    continue;
+                }
+
                 [$otherStartsAt, $otherEndsAt, $otherRole] = $this->assignmentState($other);
                 $overlaps = ($endsAt === null || $otherStartsAt->lt($endsAt))
                     && ($otherEndsAt === null || $startsAt->lt($otherEndsAt));
@@ -117,14 +122,25 @@ final class EffectiveAdministratorGuard
                     continue;
                 }
 
-                $codes = $assignmentCodes->merge($otherRole->permissions->pluck('code'))->unique();
+                $overlappingCodes = $overlappingCodes
+                    ->merge($otherRole->permissions->pluck('code'))
+                    ->unique();
+            }
 
-                if ($codes->contains('admin.users') && $codes->contains('admin.roles')) {
-                    throw new DomainRuleViolation(
-                        'bounded_effective_administrator_assignment',
-                        ['Effective administrator assignments must begin immediately and cannot expire.'],
-                    );
-                }
+            $combinedCodes = $assignmentCodes->merge($overlappingCodes)->unique();
+            $assignmentParticipatesInAdministration = $assignmentCodes->contains('admin.users')
+                || $assignmentCodes->contains('admin.roles');
+            $alreadyEffectiveWithoutAssignment = $overlappingCodes->contains('admin.users')
+                && $overlappingCodes->contains('admin.roles');
+
+            if ($assignmentParticipatesInAdministration
+                && ! $alreadyEffectiveWithoutAssignment
+                && $combinedCodes->contains('admin.users')
+                && $combinedCodes->contains('admin.roles')) {
+                throw new DomainRuleViolation(
+                    'bounded_effective_administrator_assignment',
+                    ['Effective administrator assignments must begin immediately and cannot expire.'],
+                );
             }
         }
     }

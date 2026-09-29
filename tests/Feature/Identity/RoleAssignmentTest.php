@@ -106,6 +106,36 @@ final class RoleAssignmentTest extends TestCase
         );
     }
 
+    public function test_administrator_can_receive_an_unrelated_temporary_global_role(): void
+    {
+        $actor = User::factory()->active()->create();
+        $target = User::factory()->active()->create();
+        RoleAssignment::factory()->create([
+            'user_id' => $target->id,
+            'role_id' => Role::query()->where('code', 'administrator')->firstOrFail()->id,
+        ]);
+        $temporaryRole = Role::factory()->create();
+        $temporaryRole->permissions()->attach(
+            Permission::query()->where('code', 'dashboard.view')->firstOrFail()->id,
+        );
+        $this->app->bind(AuthorizationService::class, fn () => $this->authorization(['admin.roles']));
+
+        $assignment = $this->app->make(AssignRole::class)->handle(
+            $actor,
+            $target,
+            $temporaryRole,
+            null,
+            now(),
+            now()->addDay(),
+            null,
+            null,
+            null,
+        );
+
+        self::assertSame($temporaryRole->id, $assignment->role_id);
+        self::assertNotNull($assignment->ends_at);
+    }
+
     public function test_assignment_reactivation_is_durable_and_invalidates_target_sessions(): void
     {
         $actor = User::factory()->active()->create();
