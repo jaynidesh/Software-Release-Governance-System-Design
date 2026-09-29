@@ -16,6 +16,7 @@ use App\Domain\Identity\Enums\UserState;
 use App\Models\Application;
 use App\Models\AuthChallenge;
 use App\Models\AuthSession;
+use App\Models\Permission;
 use App\Models\Role;
 use App\Models\RoleAssignment;
 use App\Models\User;
@@ -78,6 +79,50 @@ final class UserAdministrationTest extends TestCase
             $this->assertDatabaseMissing('users', ['email' => 'rollback@example.test']);
             Notification::assertNothingSent();
         }
+    }
+
+    public function test_create_rolls_back_mutually_exempting_bounded_administrator_assignments(): void
+    {
+        Notification::fake();
+        $actor = User::factory()->active()->create();
+        $adminUsers = Permission::query()->where('code', 'admin.users')->firstOrFail();
+        $adminRoles = Permission::query()->where('code', 'admin.roles')->firstOrFail();
+        $roles = collect([
+            Role::factory()->create(),
+            Role::factory()->create(),
+            Role::factory()->create(),
+            Role::factory()->create(),
+        ]);
+        $roles->take(2)->each(fn (Role $role) => $role->permissions()->attach($adminUsers));
+        $roles->skip(2)->each(fn (Role $role) => $role->permissions()->attach($adminRoles));
+        $this->app->bind(
+            AuthorizationService::class,
+            fn () => $this->authorization(['admin.users', 'admin.roles']),
+        );
+
+        try {
+            $this->app->make(CreateInvitedUser::class)->handle(
+                $actor,
+                ['name' => 'Bounded Admin', 'email' => 'bounded@example.test', 'timezone' => 'UTC'],
+                null,
+                null,
+                'bounded-admin-create',
+                $roles->map(static fn (Role $role): array => [
+                    'role' => $role,
+                    'application' => null,
+                    'starts_at' => now(),
+                    'ends_at' => now()->addDay(),
+                ])->all(),
+            );
+            self::fail('Mutually exempting bounded administrator assignments were persisted.');
+        } catch (DomainRuleViolation $exception) {
+            self::assertSame('bounded_effective_administrator_assignment', $exception->ruleCode);
+        }
+
+        $this->assertDatabaseMissing('users', ['email' => 'bounded@example.test']);
+        self::assertSame(0, RoleAssignment::query()->count());
+        $this->assertDatabaseMissing('security_events', ['correlation_id' => 'bounded-admin-create']);
+        Notification::assertNothingSent();
     }
 
     public function test_email_change_returns_user_to_invited_and_invalidates_authentication_state(): void

@@ -130,11 +130,8 @@ final class EffectiveAdministratorGuard
             $combinedCodes = $assignmentCodes->merge($overlappingCodes)->unique();
             $assignmentParticipatesInAdministration = $assignmentCodes->contains('admin.users')
                 || $assignmentCodes->contains('admin.roles');
-            $alreadyEffectiveWithoutAssignment = $overlappingCodes->contains('admin.users')
-                && $overlappingCodes->contains('admin.roles');
 
             if ($assignmentParticipatesInAdministration
-                && ! $alreadyEffectiveWithoutAssignment
                 && $combinedCodes->contains('admin.users')
                 && $combinedCodes->contains('admin.roles')) {
                 throw new DomainRuleViolation(
