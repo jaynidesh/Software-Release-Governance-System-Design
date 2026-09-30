@@ -2,6 +2,8 @@
 
 This matrix maps the approved Phase 2 identity/RBAC controls to implementation and executable evidence. The Phase 2 gate does not introduce release-governance records or a second authorization model.
 
+> **Gate status: PENDING.** Automated controls pass, but no real-browser backend was available. Every required browser flow below is **NOT RUN**. Phase 3 entry is not approved until those flows pass and the report is updated.
+
 | Control | Implementation evidence | Test evidence |
 | --- | --- | --- |
 | Passwordless, closed enrollment | Password columns/routes removed; invitation lifecycle and email OTP provider | `PasswordlessSchemaTest`, `InvitationActivationTest`, `IdentityRouteContractTest` |
@@ -29,6 +31,21 @@ This matrix maps the approved Phase 2 identity/RBAC controls to implementation a
 | MySQL concurrency/storage semantics | Generated open/active/scope slots, unique keys, row locks, transactional retries | all `tests/Integration/Identity`, especially `IdentityMySqlRegressionTest` |
 | Deployment configuration | Validated ranges/relationships, independent pepper, MySQL/database session/queue requirements | `IdentityConfigurationTest`, `EnvironmentValidatorTest`, clean MySQL migration/seed gate |
 | Supply-chain/build acceptance | Locked Composer audit, strict manifest validation, Pint, level-8 PHPStan, PHPUnit, Node 22 production build | Task 7 acceptance report and CI workflow |
+
+## Browser acceptance status
+
+| Required flow | Status |
+| --- | --- |
+| Invitation activation | **NOT RUN — no browser backend available** |
+| Ordinary login/logout | **NOT RUN — no browser backend available** |
+| Privileged enrollment/login | **NOT RUN — no browser backend available** |
+| Recovery-code login | **NOT RUN — no browser backend available** |
+| Administrator user creation | **NOT RUN — no browser backend available** |
+| Role assignment | **NOT RUN — no browser backend available** |
+| Public-ULID session revocation | **NOT RUN — no browser backend available** |
+| OTP resend/countdown/delay feedback | **NOT RUN — no browser backend available** |
+
+Retry only with the prescribed Browser skill and an attached in-app backend; do not substitute an unrelated browser automation surface. Use the isolated, mail-safe environment and exact procedure in the [identity operations runbook](../operations/identity.md#browser-acceptance-retry).
 
 ## Event retention boundary
 

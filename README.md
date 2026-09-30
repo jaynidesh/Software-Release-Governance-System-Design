@@ -4,6 +4,10 @@ This repository contains the Laravel 13 modular-monolith foundation for the Soft
 
 The approved delivery plan assigns application configuration, versioned governance, audit and evidence, approvals, release records, testing, defects, production lifecycle, notifications, reporting, and final hardening to later phases 3–15. The current application must not be treated as a complete production-ready business system.
 
+## Phase 2 acceptance status
+
+Phase 3 entry is **pending**. Automated Phase 2 security, MySQL, static-analysis, audit, and build gates pass, but the required real-browser smoke flows are **not run** because no browser backend was available. Do not begin Phase 3 until invitation activation, ordinary login/logout, privileged enrollment/login, recovery-code login, administrator user creation, role assignment, public-ULID session revocation, and OTP resend/countdown feedback all pass in the prescribed Browser environment and the [Phase 2 control matrix](docs/security/phase-2-control-matrix.md#browser-acceptance-status) is updated.
+
 ## Technical baseline
 
 - PHP 8.5 and Composer 2.x

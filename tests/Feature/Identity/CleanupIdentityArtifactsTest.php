@@ -55,6 +55,15 @@ final class CleanupIdentityArtifactsTest extends TestCase
             now()->subHours(26),
         );
         $recentlyInvalidatedPending->update(['invalidated_at' => now()]);
+        $blockedChallenge = $this->challenge($user, now()->subHours(24)->subMinute(), now()->subHours(25));
+        $blockedPending = PendingAuthentication::query()->create([
+            'user_id' => $user->id,
+            'auth_challenge_id' => $blockedChallenge->id,
+            'purpose' => AuthenticationPurpose::Login,
+            'session_id_hmac' => str_repeat('d', 64),
+            'user_session_version' => $user->session_version,
+            'expires_at' => now()->subHours(23)->subMinutes(55),
+        ]);
 
         $staleMethods = collect([
             $this->mfaMethod($user, now()->subMinutes(31)),
@@ -108,6 +117,8 @@ final class CleanupIdentityArtifactsTest extends TestCase
         self::assertTrue(AuthChallenge::query()->whereKey($freshExpiredChallenge->id)->exists());
         self::assertTrue(PendingAuthentication::query()->whereKey($recentlyInvalidatedPending->id)->exists());
         self::assertTrue(AuthChallenge::query()->whereKey($recentlyInvalidatedChallenge->id)->exists());
+        self::assertTrue(PendingAuthentication::query()->whereKey($blockedPending->id)->exists());
+        self::assertTrue(AuthChallenge::query()->whereKey($blockedChallenge->id)->exists());
         self::assertTrue(UserMfaMethod::query()->whereKey($freshMethod->id)->exists());
         self::assertTrue(UserMfaMethod::query()->whereKey($confirmedMethod->id)->exists());
         self::assertTrue(AuthSession::query()->whereKey($freshMetadataOrphan->id)->exists());
@@ -116,6 +127,21 @@ final class CleanupIdentityArtifactsTest extends TestCase
         self::assertTrue(DB::table('sessions')->where('id', $pairedSession->session_id)->exists());
         self::assertTrue(LoginEvent::query()->whereKey($loginEvent->id)->exists());
         self::assertTrue(SecurityEvent::query()->whereKey($securityEvent->id)->exists());
+
+        $this->travel(6)->minutes();
+        AuthSession::withoutTimestamps(fn () => $freshMetadataOrphan->forceFill(['updated_at' => now()])->save());
+        UserMfaMethod::withoutTimestamps(fn () => $freshMethod->forceFill(['created_at' => now()])->save());
+        DB::table('sessions')->where('id', $freshPayloadOrphanId)->update(['last_activity' => now()->timestamp]);
+
+        $this->artisan('identity:cleanup', ['--chunk' => 1])
+            ->expectsOutputToContain('pending authentications: 1')
+            ->expectsOutputToContain('authentication challenges: 1')
+            ->expectsOutputToContain('unconfirmed MFA methods: 0')
+            ->expectsOutputToContain('Orphan auth sessions: 0')
+            ->expectsOutputToContain('Orphan session payloads: 0')
+            ->assertSuccessful();
+        self::assertFalse(PendingAuthentication::query()->whereKey($blockedPending->id)->exists());
+        self::assertFalse(AuthChallenge::query()->whereKey($blockedChallenge->id)->exists());
 
         $this->artisan('identity:cleanup', ['--chunk' => 1])
             ->expectsOutputToContain('pending authentications: 0')

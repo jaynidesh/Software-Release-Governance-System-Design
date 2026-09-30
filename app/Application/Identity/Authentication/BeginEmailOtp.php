@@ -8,6 +8,7 @@ use App\Contracts\Identity\PrimaryAuthenticationProvider;
 use App\Domain\Identity\Enums\AuthenticationPurpose;
 use App\Models\AuthChallenge;
 use Illuminate\Contracts\Session\Session;
+use Illuminate\Support\Str;
 
 final class BeginEmailOtp
 {
@@ -30,27 +31,22 @@ final class BeginEmailOtp
             $correlationId,
         );
 
-        $this->session->forget(['identity.auth_challenge', 'identity.auth_purpose']);
-
-        if ($authentication->hasChallenge()) {
-            $this->session->put('identity.auth_challenge', $authentication->challengeReference);
-            $this->session->put('identity.auth_purpose', $authentication->purpose?->value);
-        }
+        $this->storePresentationState($authentication->challengeReference, $authentication->purpose);
     }
 
     public function resend(
         ?string $ipAddress,
         ?string $userAgent,
         ?string $correlationId,
-    ): bool {
+    ): void {
         $challengeReference = $this->session->get('identity.auth_challenge');
         $purposeValue = $this->session->get('identity.auth_purpose');
         $purpose = is_string($purposeValue) ? AuthenticationPurpose::tryFrom($purposeValue) : null;
 
         if (! is_string($challengeReference) || $purpose === null) {
-            $this->session->forget(['identity.auth_challenge', 'identity.auth_purpose']);
+            $this->storePresentationState(null, null);
 
-            return false;
+            return;
         }
 
         $challenge = AuthChallenge::query()
@@ -61,14 +57,11 @@ final class BeginEmailOtp
             ->first();
 
         if ($challenge === null || $challenge->user === null || $challenge->created_at === null) {
-            $this->session->forget(['identity.auth_challenge', 'identity.auth_purpose']);
+            $this->storePresentationState(null, null);
 
-            return false;
+            return;
         }
 
-        $delayPassed = now()->greaterThanOrEqualTo(
-            $challenge->created_at->copy()->addSeconds((int) config('identity.otp.resend_seconds')),
-        );
         $authentication = $this->provider->begin(
             $challenge->user->email,
             $purpose,
@@ -77,13 +70,19 @@ final class BeginEmailOtp
             $correlationId,
         );
 
-        if (! $authentication->hasChallenge()) {
-            return false;
-        }
+        $this->storePresentationState($authentication->challengeReference, $authentication->purpose);
+    }
 
-        $this->session->put('identity.auth_challenge', $authentication->challengeReference);
-        $this->session->put('identity.auth_purpose', $authentication->purpose?->value);
-
-        return $delayPassed && $authentication->challengeReference !== $challengeReference;
+    private function storePresentationState(
+        ?string $challengeReference,
+        ?AuthenticationPurpose $purpose,
+    ): void {
+        $this->session->put([
+            'identity.auth_challenge' => $challengeReference ?? strtolower((string) Str::ulid()),
+            'identity.auth_purpose' => ($purpose ?? AuthenticationPurpose::Login)->value,
+            'identity.otp_resend_available_at' => now()
+                ->addSeconds((int) config('identity.otp.resend_seconds'))
+                ->getTimestampMs(),
+        ]);
     }
 }

@@ -52,7 +52,11 @@ final class VerifyEmailOtp
             $correlationId,
         );
 
-        $this->session->forget(['identity.auth_challenge', 'identity.auth_purpose']);
+        $this->session->forget([
+            'identity.auth_challenge',
+            'identity.auth_purpose',
+            'identity.otp_resend_available_at',
+        ]);
 
         return $completed;
     }

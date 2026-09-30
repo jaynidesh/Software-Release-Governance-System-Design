@@ -21,13 +21,11 @@
             <hr>
             <form method="POST" action="{{ route('identity.auth.otp.resend') }}" data-otp-resend data-resend-available-at="{{ $resendAvailableAt?->getTimestampMs() }}">
                 @csrf
-                <button type="submit" class="btn btn-outline-secondary w-100" data-otp-resend-button @disabled($resendAvailableAt === null || $resendAvailableAt->isFuture())>
+                <button type="submit" class="btn btn-outline-secondary w-100" data-otp-resend-button @disabled($resendAvailableAt->isFuture())>
                     Request another code
                 </button>
                 <p class="form-text mb-0 mt-2 text-center" data-otp-resend-feedback aria-live="polite">
-                    @if ($resendAvailableAt === null)
-                        Return to sign in to request a code.
-                    @elseif ($resendAvailableAt->isFuture())
+                    @if ($resendAvailableAt->isFuture())
                         A new code will be available after the resend delay.
                     @else
                         You can request another code now.

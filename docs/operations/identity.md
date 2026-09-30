@@ -2,6 +2,8 @@
 
 This runbook operates the Phase 2 passwordless identity and application-scoped authorization capability. Use it with the [production foundation runbook](../runbooks/production-foundation.md). All times stored by the application are UTC.
 
+> **Acceptance status:** Phase 3 entry is pending. The automated Phase 2 gates pass, but the required real-browser smoke flows have not run because the browser runtime exposed no backend. See [Browser acceptance retry](#browser-acceptance-retry).
+
 ## Configuration
 
 Run `php artisan environment:validate` after changing configuration and before building the configuration cache. Production requires MySQL, encrypted database sessions, the database queue, HTTPS, secure cookies, a non-empty `APP_KEY`, and an independent `AUTH_OTP_PEPPER` of at least 32 bytes.
@@ -73,11 +75,12 @@ For a suspected compromise, prefer the web revocation action so the correlated s
 `AUTH_OTP_PEPPER` protects OTPs, normalized login-identifier hashes, pending-session bindings, and recovery-code hashes. There is no previous-pepper fallback. Rotation therefore invalidates every outstanding OTP, pending authentication, and recovery code.
 
 1. Open an approved change and warn users that saved recovery codes will be replaced.
-2. Enter maintenance mode and stop new authentication requests. Let the security queue drain under the old pepper.
-3. Wait at least the greater of `AUTH_OTP_TTL_MINUTES` and `AUTH_PENDING_AUTH_TTL_MINUTES`; confirm no authentication work remains in flight.
-4. Install a new independent random secret of at least 32 bytes on every web, worker, and scheduler node. Rebuild the configuration cache and restart all processes together.
-5. Exit maintenance mode. Privileged users authenticate with TOTP and immediately regenerate recovery codes. Users without working TOTP require the normal different-administrator MFA reset or the controlled recovery procedure.
-6. Monitor generic verification failures, lockouts, queue failures, and correlated events. Record completion in the change.
+2. At the edge/load balancer, stop new authentication and invitation traffic while leaving the old application revision and old-pepper security workers running. Stop the scheduler so it cannot initiate overlapping operational work. Do **not** enable Laravel maintenance mode yet: ordinary `queue:work` pauses during maintenance unless `--force` is used.
+3. Drain the `security` queue under the old revision and old pepper. Confirm the ready count, reserved count, and failed-job count are zero and the mail provider has accepted every intended delivery. Prefer already supervised workers; if an explicit drain worker is required, run `php artisan queue:work database --queue=security --stop-when-empty --tries=3 --timeout=60` without `--force` while web authentication remains edge-blocked.
+4. Keep authentication blocked and wait at least the greater of `AUTH_OTP_TTL_MINUTES` and `AUTH_PENDING_AUTH_TTL_MINUTES`. Recheck that the security queue remains empty and no authentication request is in flight.
+5. Enter Laravel maintenance mode, stop security workers, and install a new independent random secret of at least 32 bytes on every web, worker, and scheduler node. Rebuild the configuration cache before restarting any process. Never allow old- and new-pepper processes to serve concurrently.
+6. Restart web processes, security workers, and the scheduler with the new pepper, then remove the edge authentication block and exit maintenance mode. Privileged users authenticate with TOTP and immediately regenerate recovery codes. Users without working TOTP require the normal different-administrator MFA reset or the controlled recovery procedure.
+7. Monitor generic verification failures, lockouts, queue failures, and correlated events. Record the queue-empty evidence, process restart set, and completion time in the change.
 
 Do not reuse `APP_KEY`, retain the old pepper in an ad hoc environment variable, or attempt to translate stored hashes.
 
@@ -97,3 +100,18 @@ If the old key is suspected compromised, do not retain it online for a long migr
 ## Monitoring and incident evidence
 
 Alert on readiness failures, authentication failure/lockout rate changes, scheduler failures, cleanup count trends, security queue delay/failures, administrator recovery events, last-administrator protection events, and repeated unauthorized administration attempts. Preserve correlation IDs, `login_events`, `security_events`, mail-provider identifiers, deployment revision, and UTC timestamps. Never copy OTPs, TOTP secrets, recovery codes, cookies, raw Laravel session IDs, or decrypted job payloads into incident records.
+
+## Browser acceptance retry
+
+Phase 3 must not begin until an in-app Browser backend is attached and all required flows pass against an isolated MySQL/database-session/database-queue/mail-safe environment. Start the local server on a loopback URL, connect through the Browser skill, and record visible outcomes for every flow:
+
+1. invitation activation;
+2. ordinary login and POST logout;
+3. privileged TOTP enrollment and later privileged login;
+4. recovery-code login;
+5. administrator user creation;
+6. role assignment;
+7. public-ULID session revocation; and
+8. OTP resend countdown and delay feedback.
+
+Confirm no page, route, browser-visible storage, or error reveals an internal numeric ID, raw Laravel session ID, email/identifier eligibility, OTP, TOTP secret after its one-time enrollment display, or recovery code after its one-time display. Append exact results and screenshots/evidence references to the Task 7 report, rerun the full automated pipeline, and only then change the Phase 3 entry status.

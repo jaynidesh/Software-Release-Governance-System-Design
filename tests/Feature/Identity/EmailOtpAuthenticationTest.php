@@ -59,7 +59,9 @@ final class EmailOtpAuthenticationTest extends TestCase
 
         $response->assertRedirect('/login/verify')
             ->assertSessionHas('status', 'If the account is eligible, a sign-in code will be sent.')
-            ->assertSessionMissing('identity.auth_challenge')
+            ->assertSessionHas('identity.auth_challenge')
+            ->assertSessionHas('identity.auth_purpose', AuthenticationPurpose::Login->value)
+            ->assertSessionHas('identity.otp_resend_available_at')
             ->assertHeader('Cache-Control', 'no-store, private');
         self::assertSame(0, AuthChallenge::query()->count());
         Queue::assertNothingPushed();
@@ -227,7 +229,7 @@ final class EmailOtpAuthenticationTest extends TestCase
         $this->travel(30)->seconds();
         $this->post('/login/resend')
             ->assertRedirect('/login/verify')
-            ->assertSessionHas('status', 'A new code is available when the resend countdown reaches zero.');
+            ->assertSessionHas('status', 'If the account remains eligible, a new code may have been sent.');
         self::assertSame($firstChallenge->public_id, session('identity.auth_challenge'));
         self::assertSame(1, AuthChallenge::query()->count());
         Queue::assertPushed(SendQueuedNotifications::class, 1);
@@ -235,10 +237,66 @@ final class EmailOtpAuthenticationTest extends TestCase
         $this->travel(31)->seconds();
         $this->post('/login/resend')
             ->assertRedirect('/login/verify')
-            ->assertSessionHas('status', 'If the account remains eligible, a new code was sent.');
+            ->assertSessionHas('status', 'If the account remains eligible, a new code may have been sent.');
         self::assertNotSame($firstChallenge->public_id, session('identity.auth_challenge'));
         self::assertSame(2, AuthChallenge::query()->count());
         Queue::assertPushed(SendQueuedNotifications::class, 2);
+    }
+
+    public function test_verify_page_is_indistinguishable_for_eligible_unknown_ineligible_and_throttled_requests(): void
+    {
+        $this->travelTo('2026-09-30 10:00:00');
+        $this->withoutVite();
+        Queue::fake([SendQueuedNotifications::class]);
+        User::factory()->active()->create(['email' => 'eligible@example.test']);
+        User::factory()->suspended()->create(['email' => 'suspended@example.test']);
+
+        $eligible = $this->beginAndView('eligible@example.test');
+        $unknown = $this->beginAndView('unknown@example.test');
+        $ineligible = $this->beginAndView('suspended@example.test');
+        config()->set('identity.otp.request_limit', 1);
+        $throttled = $this->beginAndView('eligible@example.test');
+
+        foreach ([$unknown, $ineligible, $throttled] as $attempt) {
+            self::assertSame($eligible['redirect'], $attempt['redirect']);
+            self::assertSame($eligible['redirect_cache_control'], $attempt['redirect_cache_control']);
+            self::assertSame($eligible['content'], $attempt['content']);
+            self::assertSame($eligible['cache_control'], $attempt['cache_control']);
+            self::assertSame(array_keys($eligible['state']), array_keys($attempt['state']));
+            self::assertSame(
+                $eligible['state']['identity.otp_resend_available_at'],
+                $attempt['state']['identity.otp_resend_available_at'],
+            );
+            self::assertIsString($attempt['state']['identity.auth_challenge']);
+            self::assertIsString($attempt['state']['identity.auth_purpose']);
+        }
+    }
+
+    public function test_resend_after_delay_is_indistinguishable_for_eligible_unknown_ineligible_and_throttled_requests(): void
+    {
+        $this->withoutVite();
+        Queue::fake([SendQueuedNotifications::class]);
+        User::factory()->active()->create(['email' => 'eligible-resend@example.test']);
+        User::factory()->active()->create(['email' => 'throttled-resend@example.test']);
+        User::factory()->suspended()->create(['email' => 'suspended-resend@example.test']);
+
+        $eligible = $this->resendAfterDelay('eligible-resend@example.test', false);
+        $unknown = $this->resendAfterDelay('unknown-resend@example.test', false);
+        $ineligible = $this->resendAfterDelay('suspended-resend@example.test', false);
+        $throttled = $this->resendAfterDelay('throttled-resend@example.test', true);
+
+        foreach ([$unknown, $ineligible, $throttled] as $attempt) {
+            self::assertSame($eligible['redirect'], $attempt['redirect']);
+            self::assertSame($eligible['redirect_cache_control'], $attempt['redirect_cache_control']);
+            self::assertSame($eligible['status'], $attempt['status']);
+            self::assertSame($eligible['content'], $attempt['content']);
+            self::assertSame($eligible['cache_control'], $attempt['cache_control']);
+            self::assertSame(
+                $eligible['state']['identity.otp_resend_available_at'],
+                $attempt['state']['identity.otp_resend_available_at'],
+            );
+            self::assertSame(array_keys($eligible['state']), array_keys($attempt['state']));
+        }
     }
 
     public function test_identifier_and_ip_request_limits_are_independent(): void
@@ -277,6 +335,55 @@ final class EmailOtpAuthenticationTest extends TestCase
             'deactivated' => User::factory()->deactivated()->create(['email' => $email]),
             'locked' => User::factory()->locked()->create(['email' => $email]),
         };
+    }
+
+    /** @return array{redirect: array{int, ?string}, redirect_cache_control: ?string, content: string, cache_control: ?string, state: array<string, mixed>} */
+    private function beginAndView(string $email): array
+    {
+        $response = $this->post('/login/otp', ['email' => $email]);
+        $view = $this->get('/login/verify');
+
+        return [
+            'redirect' => [$response->getStatusCode(), $response->headers->get('Location')],
+            'redirect_cache_control' => $response->headers->get('Cache-Control'),
+            'content' => (string) $view->getContent(),
+            'cache_control' => $view->headers->get('Cache-Control'),
+            'state' => $this->authenticationPresentationState(),
+        ];
+    }
+
+    /** @return array{redirect: array{int, ?string}, redirect_cache_control: ?string, status: mixed, content: string, cache_control: ?string, state: array<string, mixed>} */
+    private function resendAfterDelay(string $email, bool $throttled): array
+    {
+        $this->travelTo('2026-09-30 12:00:00');
+        config()->set('identity.otp.request_limit', $throttled ? 1 : 10);
+        $this->post('/login/otp', ['email' => $email]);
+        $this->travel(61)->seconds();
+        $response = $this->post('/login/resend');
+        $view = $this->get('/login/verify');
+
+        return [
+            'redirect' => [$response->getStatusCode(), $response->headers->get('Location')],
+            'redirect_cache_control' => $response->headers->get('Cache-Control'),
+            'status' => session('status'),
+            'content' => (string) $view->getContent(),
+            'cache_control' => $view->headers->get('Cache-Control'),
+            'state' => $this->authenticationPresentationState(),
+        ];
+    }
+
+    /** @return array<string, mixed> */
+    private function authenticationPresentationState(): array
+    {
+        self::assertFalse(session()->has('email'));
+        self::assertFalse(session()->has('otp'));
+        self::assertFalse(session()->has('code'));
+
+        return [
+            'identity.auth_challenge' => session('identity.auth_challenge'),
+            'identity.auth_purpose' => session('identity.auth_purpose'),
+            'identity.otp_resend_available_at' => session('identity.otp_resend_available_at'),
+        ];
     }
 
     private function createChallenge(User $user): AuthChallenge

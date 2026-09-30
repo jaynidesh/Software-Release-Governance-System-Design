@@ -10,6 +10,7 @@ use App\Models\AuthSession;
 use App\Models\User;
 use App\Services\Identity\AuthenticatedSessionManager;
 use Illuminate\Contracts\Session\Session;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
@@ -161,6 +162,64 @@ final class SessionRevocationTest extends TestCase
         self::assertTrue(AuthSession::query()->whereKey($authSession->id)->exists());
     }
 
+    public function test_metadata_orphan_delete_rechecks_counterpart_and_freshness_after_candidate_discovery(): void
+    {
+        $user = User::factory()->active()->create();
+        $paired = $this->authSessionOrphan($user, 'paired-after-discovery');
+        $refreshed = $this->authSessionOrphan($user, 'refreshed-after-discovery');
+        $interleaved = false;
+        DB::listen(function (QueryExecuted $query) use ($user, $paired, $refreshed, &$interleaved): void {
+            if ($interleaved
+                || ! str_contains($query->sql, 'select `id` from `auth_sessions`')
+                || ! str_contains($query->sql, 'not exists')
+                || ! str_contains($query->sql, 'limit 500')) {
+                return;
+            }
+
+            $interleaved = true;
+            $this->insertPayload($paired->session_id, $user);
+            AuthSession::withoutTimestamps(fn () => $refreshed->forceFill(['updated_at' => now()])->save());
+        });
+
+        $result = $this->app->make(AuthenticatedSessionManager::class)->purgeOrphans();
+
+        self::assertTrue($interleaved);
+        self::assertSame(['metadata' => 0, 'payloads' => 0], $result);
+        self::assertTrue(AuthSession::query()->whereKey($paired->id)->exists());
+        self::assertTrue(AuthSession::query()->whereKey($refreshed->id)->exists());
+        self::assertTrue(DB::table('sessions')->where('id', $paired->session_id)->exists());
+    }
+
+    public function test_payload_orphan_delete_rechecks_counterpart_and_freshness_after_candidate_discovery(): void
+    {
+        $user = User::factory()->active()->create();
+        $pairedId = 'payload-paired-after-discovery';
+        $refreshedId = 'payload-refreshed-after-discovery';
+        $this->insertPayload($pairedId, $user, now()->subMinutes(6)->timestamp);
+        $this->insertPayload($refreshedId, $user, now()->subMinutes(6)->timestamp);
+        $interleaved = false;
+        DB::listen(function (QueryExecuted $query) use ($user, $pairedId, $refreshedId, &$interleaved): void {
+            if ($interleaved
+                || ! str_contains($query->sql, 'select `id` from `sessions`')
+                || ! str_contains($query->sql, 'not exists')
+                || ! str_contains($query->sql, 'limit 500')) {
+                return;
+            }
+
+            $interleaved = true;
+            AuthSession::query()->create($this->metadata($user, $pairedId, 'Paired after discovery'));
+            DB::table('sessions')->where('id', $refreshedId)->update(['last_activity' => now()->timestamp]);
+        });
+
+        $result = $this->app->make(AuthenticatedSessionManager::class)->purgeOrphans();
+
+        self::assertTrue($interleaved);
+        self::assertSame(['metadata' => 0, 'payloads' => 0], $result);
+        self::assertTrue(DB::table('sessions')->where('id', $pairedId)->exists());
+        self::assertTrue(DB::table('sessions')->where('id', $refreshedId)->exists());
+        self::assertTrue(AuthSession::query()->where('session_id', $pairedId)->exists());
+    }
+
     private function authenticate(User $user, bool $fresh = false): AuthSession
     {
         $session = $this->app->make(Session::class);
@@ -181,6 +240,17 @@ final class SessionRevocationTest extends TestCase
     {
         $authSession = AuthSession::query()->create($this->metadata($user, bin2hex(random_bytes(20)), $agent));
         $this->insertPayload($authSession->session_id, $user);
+
+        return $authSession;
+    }
+
+    private function authSessionOrphan(User $user, string $agent): AuthSession
+    {
+        $authSession = AuthSession::query()->create($this->metadata($user, bin2hex(random_bytes(20)), $agent));
+        AuthSession::withoutTimestamps(fn () => $authSession->forceFill([
+            'created_at' => now()->subMinutes(6),
+            'updated_at' => now()->subMinutes(6),
+        ])->save());
 
         return $authSession;
     }

@@ -183,12 +183,14 @@ final class AuthenticatedSessionManager
     /** @return array{metadata: int, payloads: int} */
     public function purgeOrphans(int $chunkSize = 500): array
     {
+        $metadataCutoff = now()->subSeconds(self::ORPHAN_GRACE_SECONDS);
+        $payloadCutoff = $metadataCutoff->timestamp;
         $metadata = 0;
 
         do {
-            $deleted = DB::transaction(function () use ($chunkSize): int {
+            $deleted = DB::transaction(function () use ($chunkSize, $metadataCutoff): int {
                 $ids = AuthSession::query()
-                    ->where('updated_at', '<=', now()->subSeconds(self::ORPHAN_GRACE_SECONDS))
+                    ->where('updated_at', '<=', $metadataCutoff)
                     ->whereNotExists(static function ($query): void {
                         $query->selectRaw('1')
                             ->from('sessions')
@@ -196,9 +198,18 @@ final class AuthenticatedSessionManager
                     })
                     ->orderBy('id')
                     ->limit($chunkSize)
+                    ->lockForUpdate()
                     ->pluck('id');
 
-                return $ids->isEmpty() ? 0 : AuthSession::query()->whereKey($ids)->delete();
+                return $ids->isEmpty() ? 0 : AuthSession::query()
+                    ->whereKey($ids)
+                    ->where('updated_at', '<=', $metadataCutoff)
+                    ->whereNotExists(static function ($query): void {
+                        $query->selectRaw('1')
+                            ->from('sessions')
+                            ->whereColumn('sessions.id', 'auth_sessions.session_id');
+                    })
+                    ->delete();
             }, 3);
             $metadata += $deleted;
         } while ($deleted === $chunkSize);
@@ -206,10 +217,10 @@ final class AuthenticatedSessionManager
         $payloads = 0;
 
         do {
-            $deleted = DB::transaction(function () use ($chunkSize): int {
+            $deleted = DB::transaction(function () use ($chunkSize, $payloadCutoff): int {
                 $ids = DB::table('sessions')
                     ->whereNotNull('user_id')
-                    ->where('last_activity', '<=', now()->subSeconds(self::ORPHAN_GRACE_SECONDS)->timestamp)
+                    ->where('last_activity', '<=', $payloadCutoff)
                     ->whereNotExists(static function ($query): void {
                         $query->selectRaw('1')
                             ->from('auth_sessions')
@@ -217,9 +228,19 @@ final class AuthenticatedSessionManager
                     })
                     ->orderBy('id')
                     ->limit($chunkSize)
+                    ->lockForUpdate()
                     ->pluck('id');
 
-                return $ids->isEmpty() ? 0 : DB::table('sessions')->whereIn('id', $ids)->delete();
+                return $ids->isEmpty() ? 0 : DB::table('sessions')
+                    ->whereIn('id', $ids)
+                    ->whereNotNull('user_id')
+                    ->where('last_activity', '<=', $payloadCutoff)
+                    ->whereNotExists(static function ($query): void {
+                        $query->selectRaw('1')
+                            ->from('auth_sessions')
+                            ->whereColumn('auth_sessions.session_id', 'sessions.id');
+                    })
+                    ->delete();
             }, 3);
             $payloads += $deleted;
         } while ($deleted === $chunkSize);
@@ -244,6 +265,7 @@ final class AuthenticatedSessionManager
             'identity.pending_authentication',
             'identity.auth_challenge',
             'identity.auth_purpose',
+            'identity.otp_resend_available_at',
         ]);
     }
 

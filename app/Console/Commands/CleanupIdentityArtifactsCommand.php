@@ -59,7 +59,8 @@ final class CleanupIdentityArtifactsCommand extends Command
                                     $state->whereNotNull('consumed_at')->orWhereNotNull('invalidated_at');
                                 });
                         });
-                }),
+                })
+                ->whereDoesntHave('pendingAuthentications'),
             $chunkSize,
         );
         $unconfirmedMfaMethods = $this->deleteEloquentChunks(

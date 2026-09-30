@@ -45,7 +45,11 @@ final class BeginReauthentication
             throw new DomainRuleViolation('reauthentication_unavailable', ['Reauthentication is unavailable.']);
         }
 
-        $this->session->forget(['identity.auth_challenge', 'identity.auth_purpose']);
+        $this->session->forget([
+            'identity.auth_challenge',
+            'identity.auth_purpose',
+            'identity.otp_resend_available_at',
+        ]);
         $this->session->put('identity.reauthentication_return_route', $this->safeReturnRoute->resolve($returnRoute));
         $authentication = $this->provider->begin(
             $user->email,

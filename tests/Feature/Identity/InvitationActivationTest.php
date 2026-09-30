@@ -119,12 +119,14 @@ final class InvitationActivationTest extends TestCase
         $this->withSession([
             'identity.auth_challenge' => $challenge->public_id,
             'identity.auth_purpose' => AuthenticationPurpose::Login->value,
+            'identity.otp_resend_available_at' => now()->addMinute()->getTimestampMs(),
         ]);
         $oldSessionId = $this->sessionStore()->getId();
 
         $response = $this->post('/login/verify', ['code' => $code]);
 
         $response->assertRedirect('/')->assertHeader('Cache-Control', 'no-store, private');
+        $response->assertSessionMissing('identity.otp_resend_available_at');
         $this->assertAuthenticatedAs($user);
         self::assertNotSame($oldSessionId, $this->sessionStore()->getId());
         self::assertNotNull($challenge->refresh()->consumed_at);
@@ -171,6 +173,7 @@ final class InvitationActivationTest extends TestCase
         $this->withSession([
             'identity.auth_challenge' => $challenge->public_id,
             'identity.auth_purpose' => AuthenticationPurpose::Login->value,
+            'identity.otp_resend_available_at' => now()->addMinute()->getTimestampMs(),
         ]);
         $oldSessionId = $this->sessionStore()->getId();
 
@@ -178,7 +181,8 @@ final class InvitationActivationTest extends TestCase
 
         $response->assertRedirect('/login/mfa/enroll')
             ->assertSessionHas('identity.pending_authentication')
-            ->assertSessionMissing('identity.auth_challenge');
+            ->assertSessionMissing('identity.auth_challenge')
+            ->assertSessionMissing('identity.otp_resend_available_at');
         $this->assertGuest();
         self::assertNotSame($oldSessionId, $this->sessionStore()->getId());
         $pending = PendingAuthentication::query()->sole();
