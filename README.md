@@ -1,8 +1,8 @@
 # Software Release Governance System
 
-This repository contains the Laravel 13 modular-monolith foundation for the Software Release Governance System. Phase 1 establishes the supported runtime, MySQL-backed health and test paths, deployment validation, safe error handling, structured redacted logs, security headers, and a server-rendered Bootstrap shell.
+This repository contains the Laravel 13 modular-monolith foundation for the Software Release Governance System. Phase 1 establishes the supported runtime, MySQL-backed health and test paths, deployment validation, safe error handling, structured redacted logs, security headers, and a server-rendered Bootstrap shell. Phase 2 adds passwordless identity, privileged MFA, transactional sessions, public identifiers, and application-scoped RBAC.
 
-Identity and application-scoped RBAC are Phase 2. The approved delivery plan assigns application configuration, versioned governance, audit and evidence, approvals, release records, testing, defects, production lifecycle, notifications, reporting, and final hardening to later post-foundation phases 3–15. The current shell must not be treated as a production-ready business system.
+The approved delivery plan assigns application configuration, versioned governance, audit and evidence, approvals, release records, testing, defects, production lifecycle, notifications, reporting, and final hardening to later phases 3–15. The current application must not be treated as a complete production-ready business system.
 
 ## Technical baseline
 
@@ -38,6 +38,9 @@ CI runs validation, locked dependency audits, Pint, level-8 PHPStan, MySQL migra
 - [Local development runbook](docs/runbooks/local-development.md)
 - [Production foundation runbook](docs/runbooks/production-foundation.md)
 - [Phase 1 security review](docs/security/phase-1-review.md)
+- [Identity operations runbook](docs/operations/identity.md)
+- [Controlled administrator recovery](docs/operations/admin-recovery.md)
+- [Phase 2 identity security control matrix](docs/security/phase-2-control-matrix.md)
 - [Continuous-integration workflow](.github/workflows/ci.yml)
 
 Use the production runbook for environment requirements, database privilege separation, startup probes, logging, and rollback guidance.

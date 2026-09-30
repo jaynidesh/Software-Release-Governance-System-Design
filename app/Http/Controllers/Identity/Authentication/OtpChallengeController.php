@@ -9,15 +9,30 @@ use App\Application\Identity\Authentication\VerifyEmailOtp;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Identity\Authentication\RequestOtpRequest;
 use App\Http\Requests\Identity\Authentication\VerifyOtpRequest;
+use App\Models\AuthChallenge;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use Illuminate\Validation\ValidationException;
 
 final class OtpChallengeController extends Controller
 {
-    public function create(): Response
+    public function create(Request $request): Response
     {
-        return response()->view('identity.auth.verify-otp')
+        $challengeReference = $request->session()->get('identity.auth_challenge');
+        $challenge = is_string($challengeReference)
+            ? AuthChallenge::query()
+                ->select(['id', 'created_at'])
+                ->where('public_id', $challengeReference)
+                ->first()
+            : null;
+        $resendAvailableAt = $challenge?->created_at?->copy()->addSeconds(
+            (int) config('identity.otp.resend_seconds'),
+        );
+
+        return response()->view('identity.auth.verify-otp', [
+            'resendAvailableAt' => $resendAvailableAt,
+        ])
             ->header('Cache-Control', 'no-store, private');
     }
 
@@ -62,6 +77,26 @@ final class OtpChallengeController extends Controller
                 ? 'identity.mfa.verify.create'
                 : 'identity.mfa.enroll.create')
             : redirect()->route('home');
+        $response->headers->set('Cache-Control', 'no-store, private');
+
+        return $response;
+    }
+
+    public function resend(Request $request, BeginEmailOtp $beginEmailOtp): RedirectResponse
+    {
+        $correlationId = $request->attributes->get('correlation_id');
+        $resent = $beginEmailOtp->resend(
+            $request->ip(),
+            $request->userAgent(),
+            is_string($correlationId) ? $correlationId : null,
+        );
+
+        $response = redirect()->route('identity.auth.otp.create')->with(
+            'status',
+            $resent
+                ? 'If the account remains eligible, a new code was sent.'
+                : 'A new code is available when the resend countdown reaches zero.',
+        );
         $response->headers->set('Cache-Control', 'no-store, private');
 
         return $response;

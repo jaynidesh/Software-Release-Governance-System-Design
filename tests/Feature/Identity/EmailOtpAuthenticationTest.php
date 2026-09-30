@@ -197,6 +197,50 @@ final class EmailOtpAuthenticationTest extends TestCase
         Queue::assertPushed(SendQueuedNotifications::class, 2);
     }
 
+    public function test_verification_screen_offers_an_accessible_server_timed_resend_without_storing_email(): void
+    {
+        $this->travelTo('2026-09-29 10:00:00');
+        $this->withoutVite();
+        Queue::fake([SendQueuedNotifications::class]);
+        User::factory()->active()->create(['email' => 'person@example.test']);
+
+        $this->post('/login/otp', ['email' => 'person@example.test']);
+
+        $this->get('/login/verify')
+            ->assertOk()
+            ->assertViewHas('resendAvailableAt', now()->addSeconds(60))
+            ->assertSee('Request another code')
+            ->assertSee('data-otp-resend', false)
+            ->assertSee('aria-live="polite"', false)
+            ->assertSee('disabled', false);
+        self::assertFalse(session()->has('email'));
+    }
+
+    public function test_resend_action_preserves_the_challenge_during_the_delay_and_replaces_it_afterward(): void
+    {
+        $this->travelTo('2026-09-29 10:00:00');
+        Queue::fake([SendQueuedNotifications::class]);
+        User::factory()->active()->create(['email' => 'person@example.test']);
+        $this->post('/login/otp', ['email' => 'person@example.test']);
+        $firstChallenge = AuthChallenge::query()->sole();
+
+        $this->travel(30)->seconds();
+        $this->post('/login/resend')
+            ->assertRedirect('/login/verify')
+            ->assertSessionHas('status', 'A new code is available when the resend countdown reaches zero.');
+        self::assertSame($firstChallenge->public_id, session('identity.auth_challenge'));
+        self::assertSame(1, AuthChallenge::query()->count());
+        Queue::assertPushed(SendQueuedNotifications::class, 1);
+
+        $this->travel(31)->seconds();
+        $this->post('/login/resend')
+            ->assertRedirect('/login/verify')
+            ->assertSessionHas('status', 'If the account remains eligible, a new code was sent.');
+        self::assertNotSame($firstChallenge->public_id, session('identity.auth_challenge'));
+        self::assertSame(2, AuthChallenge::query()->count());
+        Queue::assertPushed(SendQueuedNotifications::class, 2);
+    }
+
     public function test_identifier_and_ip_request_limits_are_independent(): void
     {
         config()->set('identity.otp.request_limit', 2);

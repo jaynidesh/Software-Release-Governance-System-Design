@@ -41,6 +41,7 @@ Route::middleware('guest')->group(function (): void {
     Route::post('/login/otp', [OtpChallengeController::class, 'store'])->name('identity.auth.otp.store');
     Route::get('/login/verify', [OtpChallengeController::class, 'create'])->name('identity.auth.otp.create');
     Route::post('/login/verify', [OtpChallengeController::class, 'update'])->name('identity.auth.otp.verify');
+    Route::post('/login/resend', [OtpChallengeController::class, 'resend'])->name('identity.auth.otp.resend');
     Route::post('/login/pending/cancel', PendingAuthenticationCancellationController::class)
         ->name('identity.auth.pending.cancel');
     Route::get('/login/mfa', [PendingMfaController::class, 'create'])
