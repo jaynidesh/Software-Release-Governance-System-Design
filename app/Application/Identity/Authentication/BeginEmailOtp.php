@@ -57,7 +57,7 @@ final class BeginEmailOtp
             ->first();
 
         if ($challenge === null || $challenge->user === null || $challenge->created_at === null) {
-            $this->storePresentationState(null, null);
+            $this->storePresentationState($challengeReference, $purpose);
 
             return;
         }
@@ -70,7 +70,10 @@ final class BeginEmailOtp
             $correlationId,
         );
 
-        $this->storePresentationState($authentication->challengeReference, $authentication->purpose);
+        $this->storePresentationState(
+            $authentication->challengeReference ?? $challengeReference,
+            $authentication->purpose ?? $purpose,
+        );
     }
 
     private function storePresentationState(

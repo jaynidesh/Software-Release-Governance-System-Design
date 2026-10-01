@@ -299,6 +299,92 @@ final class EmailOtpAuthenticationTest extends TestCase
         }
     }
 
+    public function test_throttled_resend_preserves_the_delivered_otp_while_matching_a_decoy_surface(): void
+    {
+        $this->withoutVite();
+        config()->set('identity.otp.request_limit', 1);
+        $this->travelTo('2026-09-30 14:00:00');
+
+        $this->post('/login/otp', ['email' => 'unknown-preservation@example.test']);
+        $this->travel(61)->seconds();
+        $decoy = $this->resendSurface();
+        self::assertSame(0, AuthChallenge::query()->count());
+        self::assertSame(0, DB::table('jobs')->count());
+
+        $this->travelTo('2026-09-30 14:00:00');
+        $user = User::factory()->active()->create(['email' => 'eligible-preservation@example.test']);
+        $this->post('/login/otp', ['email' => $user->email]);
+        $challenge = AuthChallenge::query()->sole();
+        $reference = $challenge->public_id;
+        $job = $this->queuedNotification();
+        self::assertInstanceOf(EmailOtpNotification::class, $job->notification);
+        $code = $job->notification->code;
+        self::assertTrue($job->notification->shouldSend($user, 'mail'));
+        $job->notification->afterSending($user, 'mail', null);
+        self::assertNotNull($challenge->refresh()->delivered_at);
+        self::assertTrue($this->app->make(OtpHasher::class)->verify(
+            $code,
+            $reference,
+            $user->id,
+            AuthenticationPurpose::Login,
+            $challenge->code_hmac,
+        ));
+        $this->travel(61)->seconds();
+
+        $eligible = $this->resendSurface();
+
+        self::assertSame($decoy['redirect'], $eligible['redirect']);
+        self::assertSame($decoy['redirect_cache_control'], $eligible['redirect_cache_control']);
+        self::assertSame($decoy['status'], $eligible['status']);
+        self::assertSame($decoy['content'], $eligible['content']);
+        self::assertSame($decoy['cache_control'], $eligible['cache_control']);
+        self::assertSame(
+            $decoy['state']['identity.otp_resend_available_at'],
+            $eligible['state']['identity.otp_resend_available_at'],
+        );
+        self::assertSame($reference, $eligible['state']['identity.auth_challenge']);
+        self::assertSame(AuthenticationPurpose::Login->value, $eligible['state']['identity.auth_purpose']);
+        self::assertSame(1, AuthChallenge::query()->count());
+        self::assertNull($challenge->refresh()->invalidated_at);
+        self::assertTrue($this->app->make(OtpHasher::class)->verify(
+            $code,
+            $reference,
+            $user->id,
+            AuthenticationPurpose::Login,
+            $challenge->code_hmac,
+        ));
+        self::assertSame(1, DB::table('jobs')->count());
+
+        $this->post('/login/verify', ['code' => $code])
+            ->assertRedirect('/');
+        $this->assertAuthenticatedAs($user);
+    }
+
+    public function test_decoy_resend_recovers_generic_state_without_secret_material(): void
+    {
+        $this->travelTo('2026-09-30 15:00:00');
+        $this->post('/login/otp', ['email' => 'unknown-decoy@example.test']);
+        $decoyReference = session('identity.auth_challenge');
+        session()->forget('identity.otp_resend_available_at');
+        $this->travel(61)->seconds();
+
+        $surface = $this->resendSurface();
+
+        self::assertSame([302, url('/login/verify')], $surface['redirect']);
+        self::assertSame('no-store, private', $surface['redirect_cache_control']);
+        self::assertSame('If the account remains eligible, a new code may have been sent.', $surface['status']);
+        self::assertIsString($surface['state']['identity.auth_challenge']);
+        self::assertTrue(Str::isUlid($surface['state']['identity.auth_challenge']));
+        self::assertSame($decoyReference, $surface['state']['identity.auth_challenge']);
+        self::assertSame(AuthenticationPurpose::Login->value, $surface['state']['identity.auth_purpose']);
+        self::assertSame(now()->addSeconds(60)->getTimestampMs(), $surface['state']['identity.otp_resend_available_at']);
+        self::assertSame(0, AuthChallenge::query()->count());
+        self::assertSame(0, DB::table('jobs')->count());
+        self::assertFalse(session()->has('email'));
+        self::assertFalse(session()->has('otp'));
+        self::assertFalse(session()->has('code'));
+    }
+
     public function test_identifier_and_ip_request_limits_are_independent(): void
     {
         config()->set('identity.otp.request_limit', 2);
@@ -360,12 +446,30 @@ final class EmailOtpAuthenticationTest extends TestCase
         $this->post('/login/otp', ['email' => $email]);
         $this->travel(61)->seconds();
         $response = $this->post('/login/resend');
+        $status = session('status');
         $view = $this->get('/login/verify');
 
         return [
             'redirect' => [$response->getStatusCode(), $response->headers->get('Location')],
             'redirect_cache_control' => $response->headers->get('Cache-Control'),
-            'status' => session('status'),
+            'status' => $status,
+            'content' => (string) $view->getContent(),
+            'cache_control' => $view->headers->get('Cache-Control'),
+            'state' => $this->authenticationPresentationState(),
+        ];
+    }
+
+    /** @return array{redirect: array{int, ?string}, redirect_cache_control: ?string, status: mixed, content: string, cache_control: ?string, state: array<string, mixed>} */
+    private function resendSurface(): array
+    {
+        $response = $this->post('/login/resend');
+        $status = session('status');
+        $view = $this->get('/login/verify');
+
+        return [
+            'redirect' => [$response->getStatusCode(), $response->headers->get('Location')],
+            'redirect_cache_control' => $response->headers->get('Cache-Control'),
+            'status' => $status,
             'content' => (string) $view->getContent(),
             'cache_control' => $view->headers->get('Cache-Control'),
             'state' => $this->authenticationPresentationState(),
