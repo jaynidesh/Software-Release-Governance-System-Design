@@ -13,6 +13,12 @@
     <div class="d-flex min-vh-100">
         <x-app-sidebar />
         <main id="main-content" class="container-fluid p-4" tabindex="-1">
+            @if (session('warning'))
+                <div class="alert alert-warning" role="alert">
+                    {{ session('warning') }}
+                    <a href="{{ route('identity.security.index') }}">Manage recovery codes</a>
+                </div>
+            @endif
             @yield('content')
         </main>
     </div>

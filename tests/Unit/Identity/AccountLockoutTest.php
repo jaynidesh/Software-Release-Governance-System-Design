@@ -16,6 +16,37 @@ final class AccountLockoutTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_failures_roll_forward_without_forgetting_recent_attempts(): void
+    {
+        $this->travelTo('2026-10-05 10:00:00');
+        config()->set('identity.lockout.attempts', 5);
+        $user = User::factory()->active()->create();
+        $lockout = $this->app->make(AccountLockout::class);
+        foreach ([0, 14, 14, 14, 16, 16] as $index => $minute) {
+            $this->travelTo('2026-10-05 10:'.str_pad((string) $minute, 2, '0', STR_PAD_LEFT).':00');
+            self::assertSame($index === 5, $lockout->recordFailure($user->fresh()));
+        }
+        self::assertSame(5, $user->refresh()->failed_auth_attempts);
+        self::assertSame('2026-10-05 10:14:00', $user->failed_auth_window_started_at?->format('Y-m-d H:i:s'));
+    }
+
+    public function test_rolling_window_includes_exact_boundary_prunes_older_attempts_and_resets_history(): void
+    {
+        $this->travelTo('2026-10-05 10:00:00');
+        $user = User::factory()->active()->create();
+        $lockout = $this->app->make(AccountLockout::class);
+        $lockout->recordFailure($user);
+        $this->travel(15)->minutes();
+        $lockout->recordFailure($user);
+        self::assertSame(2, $user->refresh()->failed_auth_attempts);
+        $this->travel(1)->seconds();
+        $lockout->recordFailure($user);
+        self::assertSame(2, $user->refresh()->failed_auth_attempts);
+        $lockout->reset($user);
+        $lockout->recordFailure($user);
+        self::assertSame(1, $user->refresh()->failed_auth_attempts);
+    }
+
     public function test_failures_use_a_sliding_window_and_lock_at_the_configured_threshold(): void
     {
         $this->travelTo('2026-09-22 10:00:00');

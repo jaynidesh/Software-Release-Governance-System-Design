@@ -6,12 +6,16 @@ use App\Http\Middleware\NoStoreAuthenticationResponse;
 use App\Http\Middleware\RequireFreshReauthentication;
 use App\Http\Middleware\RequirePendingAuthentication;
 use App\Http\Middleware\SecurityHeaders;
+use App\Models\User;
+use App\Services\Identity\IdentityMutationBoundary;
 use App\Support\Exceptions\DomainRuleViolation;
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -44,6 +48,19 @@ return Application::configure(basePath: dirname(__DIR__))
         $exceptions->shouldRenderJsonWhen(
             $shouldRenderJson,
         );
+
+        $exceptions->render(function (HttpException $exception, Request $request): void {
+            if ($exception->getStatusCode() === 403 && ! $request->isMethodSafe()) {
+                $actor = $request->user();
+                app(IdentityMutationBoundary::class)->record(
+                    $exception->getPrevious() instanceof AuthorizationException
+                        ? $exception->getPrevious()
+                        : new AuthorizationException,
+                    $actor instanceof User ? $actor : null,
+                    $request->route()?->getName() ?? 'identity.http_mutation',
+                );
+            }
+        });
 
         $exceptions->render(function (DomainRuleViolation $exception, Request $request) use ($shouldRenderJson) {
             $payload = [

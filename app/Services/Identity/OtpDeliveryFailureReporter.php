@@ -6,6 +6,7 @@ namespace App\Services\Identity;
 
 use App\Models\AuthChallenge;
 use App\Models\User;
+use App\Support\Exceptions\OtpDeliveryException;
 use Psr\Log\LoggerInterface;
 use Throwable;
 
@@ -35,7 +36,9 @@ final class OtpDeliveryFailureReporter
             'challenge_id' => $challenge->public_id,
             'correlation_id' => $challenge->correlation_id,
             'channel' => $channel,
-            'exception_type' => $exception === null ? null : $exception::class,
+            'exception_type' => $exception instanceof OtpDeliveryException
+                ? $exception->exceptionType
+                : ($exception === null ? null : $exception::class),
         ]);
     }
 }

@@ -24,7 +24,13 @@ final class CompleteReauthentication
         ?string $userAgent,
         ?string $correlationId,
     ): string {
-        $this->verify->handle($pending, $code, $ipAddress, $userAgent, $correlationId);
+        $result = $this->verify->handle($pending, $code, $ipAddress, $userAgent, $correlationId);
+        if ($result['used_recovery'] && $result['remaining_recovery'] <= 2) {
+            $this->session->flash('warning', sprintf(
+                'You have %d recovery codes remaining. Generate a new set now.',
+                $result['remaining_recovery'],
+            ));
+        }
         $route = $this->safeReturnRoute->resolve(
             is_string($this->session->get('identity.reauthentication_return_route'))
                 ? $this->session->get('identity.reauthentication_return_route')

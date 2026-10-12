@@ -30,6 +30,50 @@ final class RecoveryCodeAuthenticationTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_email_totp_and_recovery_failures_share_the_same_rolling_history(): void
+    {
+        $this->travelTo('2026-10-05 10:00:00');
+        $user = User::factory()->privileged()->mfaConfirmed()->create();
+        $this->post('/login/otp', ['email' => $user->email]);
+        AuthChallenge::query()->latest('id')->firstOrFail()->update(['delivered_at' => now()]);
+        $this->post('/login/verify', ['code' => $this->queuedOtpCode() === '000000' ? '111111' : '000000']);
+        $this->travel(14)->minutes();
+        $this->post('/login/otp', ['email' => $user->email]);
+        AuthChallenge::query()->latest('id')->firstOrFail()->update(['delivered_at' => now()]);
+        $this->post('/login/verify', ['code' => $this->queuedOtpCode() === '000000' ? '111111' : '000000']);
+        $this->post('/login/verify', ['code' => $this->queuedOtpCode()])->assertRedirect('/login/mfa');
+        self::assertSame(2, $user->refresh()->failed_auth_attempts);
+        $this->withCookie((string) config('session.cookie'), $this->sessionStore()->getId());
+        $this->app->instance(TotpVerifier::class, new class implements TotpVerifier
+        {
+            public function generateSecret(): string
+            {
+                return 'unused';
+            }
+
+            public function provisioningUri(string $secret, string $accountName): string
+            {
+                return 'unused';
+            }
+
+            public function verify(string $secret, string $code, ?int $timestamp = null): ?int
+            {
+                return null;
+            }
+        });
+        $this->post('/login/mfa', ['code' => '000000']);
+        $this->post('/login/mfa', ['code' => 'invalid-recovery']);
+        $this->travel(2)->minutes();
+        $this->post('/login/mfa', ['code' => '000000']);
+        self::assertNull($user->refresh()->locked_until);
+        $this->post('/login/mfa', ['code' => 'invalid-recovery']);
+        self::assertNotNull($user->refresh()->locked_until);
+        self::assertSame(5, $user->failed_auth_attempts);
+        self::assertCount(5, $user->auth_failure_timestamps);
+        self::assertNotNull(PendingAuthentication::query()->sole()->invalidated_at);
+        $this->assertGuest();
+    }
+
     public function test_totp_completion_is_monotonic_and_resets_failures_only_after_full_success(): void
     {
         $this->travelTo('2026-09-23 10:00:10');
@@ -97,6 +141,10 @@ final class RecoveryCodeAuthenticationTest extends TestCase
         $this->post('/login/mfa', ['code' => $plain])
             ->assertRedirect('/')
             ->assertSessionHas('warning', 'You have 0 recovery codes remaining. Generate a new set now.');
+
+        $this->withCookie((string) config('session.cookie'), $this->sessionStore()->getId());
+        $this->get('/')->assertSee('You have 0 recovery codes remaining. Generate a new set now.')
+            ->assertSee('href="'.route('identity.security.index').'"', false);
 
         self::assertNotNull(UserRecoveryCode::query()->sole()->used_at);
         self::assertNotNull($pending->refresh()->completed_at);

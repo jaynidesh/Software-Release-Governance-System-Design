@@ -7,47 +7,53 @@ namespace App\Services\Identity;
 use App\Models\AuthChallenge;
 use App\Models\PendingAuthentication;
 use App\Models\User;
+use Carbon\CarbonImmutable;
+use Illuminate\Support\Facades\DB;
 
 final class AccountLockout
 {
     public function recordFailure(User $user): bool
     {
-        $windowStartedAt = $user->failed_auth_window_started_at;
-        $withinWindow = $windowStartedAt !== null
-            && now()->subMinutes((int) config('identity.lockout.window_minutes'))
-                ->lessThanOrEqualTo($windowStartedAt);
-
-        $failedAttempts = $withinWindow ? $user->failed_auth_attempts + 1 : 1;
-
-        $user->forceFill([
-            'failed_auth_attempts' => $failedAttempts,
-            'failed_auth_window_started_at' => $withinWindow ? $windowStartedAt : now(),
-        ]);
-
-        $locked = $failedAttempts >= (int) config('identity.lockout.attempts');
-
-        if ($locked) {
+        return DB::transaction(function () use ($user): bool {
+            $lockedUser = User::query()->whereKey($user->getKey())->lockForUpdate()->firstOrFail();
+            $now = CarbonImmutable::now();
+            $cutoff = $now->subMinutes((int) config('identity.lockout.window_minutes'));
+            /** @var list<string> $history */
+            $history = $lockedUser->auth_failure_timestamps ?? [];
+            $history = array_values(array_filter(
+                $history,
+                static fn (string $timestamp): bool => CarbonImmutable::parse($timestamp)->greaterThanOrEqualTo($cutoff),
+            ));
+            $history[] = $now->format('Y-m-d H:i:s.u');
+            $locked = count($history) >= (int) config('identity.lockout.attempts');
             $user->forceFill([
-                'locked_until' => now()->addMinutes((int) config('identity.lockout.minutes')),
-            ]);
-        }
+                'auth_failure_timestamps' => $history,
+                'failed_auth_attempts' => count($history),
+                'failed_auth_window_started_at' => $history[0],
+                'locked_until' => $locked
+                    ? $now->addMinutes((int) config('identity.lockout.minutes'))
+                    : $lockedUser->locked_until,
+            ])->save();
 
-        $user->save();
+            if ($locked) {
+                $this->invalidateAuthenticationState($user);
+            }
 
-        if ($locked) {
-            $this->invalidateAuthenticationState($user);
-        }
-
-        return $locked;
+            return $locked;
+        }, 3);
     }
 
     public function reset(User $user): void
     {
-        $user->forceFill([
-            'failed_auth_attempts' => 0,
-            'failed_auth_window_started_at' => null,
-            'locked_until' => null,
-        ])->save();
+        DB::transaction(function () use ($user): void {
+            User::query()->whereKey($user->getKey())->lockForUpdate()->firstOrFail();
+            $user->forceFill([
+                'auth_failure_timestamps' => [],
+                'failed_auth_attempts' => 0,
+                'failed_auth_window_started_at' => null,
+                'locked_until' => null,
+            ])->save();
+        }, 3);
     }
 
     public function isLocked(User $user): bool

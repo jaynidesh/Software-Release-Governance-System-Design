@@ -24,6 +24,35 @@ final class PrivilegedReauthenticationTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_retained_mfa_is_available_after_privilege_removal_logout_and_ordinary_login(): void
+    {
+        $user = User::factory()->privileged()->mfaConfirmed()->create();
+        $this->authenticate($user, now());
+        $user->roleAssignments()->update(['revoked_at' => now()]);
+        $this->post('/logout')->assertRedirect('/login');
+        $this->withCookie((string) config('session.cookie'), $this->sessionStore()->getId());
+        $this->post('/login/otp', ['email' => $user->email]);
+        AuthChallenge::query()->latest('id')->firstOrFail()->update(['delivered_at' => now()]);
+        $this->post('/login/verify', ['code' => $this->queuedOtpCode()])->assertRedirect('/');
+        $this->withCookie((string) config('session.cookie'), $this->sessionStore()->getId());
+        $authSession = AuthSession::query()->where('session_id', $this->sessionStore()->getId())->sole();
+        self::assertNull($authSession->mfa_authenticated_at);
+        self::assertNull($authSession->reauthenticated_at);
+
+        $this->post('/reauthenticate')->assertRedirect('/reauthenticate')->assertSessionHasNoErrors();
+        AuthChallenge::query()->latest('id')->firstOrFail()->update(['delivered_at' => now()]);
+        $this->post('/reauthenticate/verify', ['code' => $this->queuedOtpCode()])->assertRedirect('/reauthenticate/mfa');
+        self::assertNull($authSession->refresh()->reauthenticated_at);
+        $this->withCookie((string) config('session.cookie'), $this->sessionStore()->getId());
+        $this->post('/reauthenticate/mfa', ['code' => TOTP::createFromSecret($user->mfaMethods()->sole()->secret)->now()])
+            ->assertRedirect('/security');
+        $this->withCookie((string) config('session.cookie'), $this->sessionStore()->getId());
+        self::assertNotNull($authSession->refresh()->reauthenticated_at);
+        $this->post('/security/recovery-codes')->assertOk();
+        $this->post('/security/totp')->assertOk();
+        self::assertNull($user->mfaMethods()->sole()->confirmed_at);
+    }
+
     public function test_guest_reauthentication_redirect_is_not_cacheable(): void
     {
         $this->get('/reauthenticate')
@@ -159,7 +188,11 @@ final class PrivilegedReauthenticationTest extends TestCase
         $this->post('/reauthenticate/verify', ['code' => $this->queuedOtpCode()]);
         $this->withCookie((string) config('session.cookie'), $this->sessionStore()->getId());
 
-        $this->post('/reauthenticate/mfa', ['code' => $plain])->assertRedirect('/security');
+        $this->post('/reauthenticate/mfa', ['code' => $plain])->assertRedirect('/security')
+            ->assertSessionHas('warning', 'You have 0 recovery codes remaining. Generate a new set now.');
+        $this->withCookie((string) config('session.cookie'), $this->sessionStore()->getId());
+        $this->get('/security')->assertSee('You have 0 recovery codes remaining. Generate a new set now.')
+            ->assertSee('href="'.route('identity.security.index').'"', false);
 
         self::assertNotNull($recovery->refresh()->used_at);
         self::assertNotNull($authSession->refresh()->reauthenticated_at);

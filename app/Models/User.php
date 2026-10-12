@@ -33,6 +33,9 @@ class User extends Authenticatable
         'session_version' => 1,
     ];
 
+    /** @var list<string> */
+    protected $hidden = ['auth_failure_timestamps'];
+
     /**
      * Get the attributes that should be cast.
      *
@@ -50,6 +53,7 @@ class User extends Authenticatable
             'failed_auth_window_started_at' => 'datetime',
             'locked_until' => 'datetime',
             'failed_auth_attempts' => 'integer',
+            'auth_failure_timestamps' => 'array',
             'session_version' => 'integer',
         ];
     }

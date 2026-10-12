@@ -25,6 +25,58 @@ final class FinalAdministratorProtectionTest extends TestCase
 {
     use RefreshDatabase;
 
+    public function test_role_changes_cannot_promote_bounded_assignments_into_administrator_unions(): void
+    {
+        $actor = User::factory()->active()->create();
+        $permanent = User::factory()->privileged()->create();
+        $target = User::factory()->active()->create();
+        $usersPermission = Permission::query()->where('code', 'admin.users')->value('id');
+        $rolesPermission = Permission::query()->where('code', 'admin.roles')->value('id');
+
+        foreach (['composition', 'activation', 'split_composition', 'split_activation'] as $path) {
+            $role = Role::factory()->create(['is_active' => ! str_contains($path, 'activation')]);
+            $assignment = RoleAssignment::factory()->create([
+                'user_id' => $target->id, 'role_id' => $role->id, 'ends_at' => now()->addMinute(),
+            ]);
+            $permissions = [$usersPermission, $rolesPermission];
+            $split = null;
+            if (str_starts_with($path, 'split')) {
+                $split = Role::factory()->create();
+                $split->permissions()->attach($usersPermission);
+                RoleAssignment::factory()->create(['user_id' => $target->id, 'role_id' => $split->id]);
+                $permissions = [$rolesPermission];
+            }
+            if (str_contains($path, 'activation')) {
+                $role->permissions()->sync($permissions);
+            }
+            $version = $target->refresh()->session_version;
+            try {
+                str_contains($path, 'activation')
+                    ? $this->app->make(ChangeRoleState::class)->handle($actor, $role, true, null, null, 'bounded-role')
+                    : $this->app->make(SyncRolePermissions::class)->handle($actor, $role, $permissions, null, null, 'bounded-role');
+                self::fail('Role change promoted a bounded administrator: '.$path);
+            } catch (DomainRuleViolation $exception) {
+                self::assertSame('bounded_effective_administrator_assignment', $exception->ruleCode);
+            }
+            self::assertSame($version, $target->refresh()->session_version);
+            self::assertSame(! str_contains($path, 'activation'), $role->refresh()->is_active);
+            if (! str_contains($path, 'activation')) {
+                self::assertSame(0, $role->permissions()->count());
+            }
+            $assignment->update(['revoked_at' => now()]);
+            $split?->update(['is_active' => false]);
+        }
+
+        $this->travel(2)->minutes();
+        try {
+            $this->app->make(ChangeUserState::class)->handle($actor, $permanent, UserState::Deactivated, null, null, 'last-admin');
+            self::fail('The permanent administrator was lost.');
+        } catch (DomainRuleViolation $exception) {
+            self::assertSame('last_effective_administrator', $exception->ruleCode);
+        }
+        self::assertSame(UserState::Active, $permanent->refresh()->state);
+    }
+
     protected function setUp(): void
     {
         parent::setUp();

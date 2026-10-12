@@ -30,7 +30,7 @@ final class BeginReauthentication
         ?string $userAgent,
         ?string $correlationId,
     ): void {
-        if ($this->sessions->current($user, true, false) === null) {
+        if ($this->sessions->current($user, false, false) === null) {
             throw new DomainRuleViolation('reauthentication_unavailable', ['Reauthentication is unavailable.']);
         }
 

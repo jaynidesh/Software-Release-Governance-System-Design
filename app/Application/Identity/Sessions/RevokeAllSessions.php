@@ -8,12 +8,13 @@ use App\Contracts\Identity\AuthorizationService;
 use App\Models\AuthSession;
 use App\Models\User;
 use App\Services\Identity\IdentityEventRecorder;
+use App\Services\Identity\IdentityMutationBoundary;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Support\Facades\DB;
 
 final class RevokeAllSessions
 {
-    public function __construct(
+    public function __construct(private readonly IdentityMutationBoundary $mutationBoundary,
         private readonly AuthorizationService $authorization,
         private readonly IdentityEventRecorder $events,
     ) {}
@@ -25,38 +26,40 @@ final class RevokeAllSessions
         ?string $userAgent,
         ?string $correlationId,
     ): void {
-        DB::transaction(function () use ($actor, $target, $ipAddress, $userAgent, $correlationId): void {
-            $userIds = [(int) $actor->getKey(), (int) $target->getKey()];
-            sort($userIds);
-            $users = User::query()->whereKey($userIds)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
-            $lockedActor = $users->get($actor->getKey());
-            $lockedTarget = $users->get($target->getKey());
+        $this->mutationBoundary->run(function () use ($actor, $target, $ipAddress, $userAgent, $correlationId): void {
+            DB::transaction(function () use ($actor, $target, $ipAddress, $userAgent, $correlationId): void {
+                $userIds = [(int) $actor->getKey(), (int) $target->getKey()];
+                sort($userIds);
+                $users = User::query()->whereKey($userIds)->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+                $lockedActor = $users->get($actor->getKey());
+                $lockedTarget = $users->get($target->getKey());
 
-            if (! $lockedActor instanceof User || ! $lockedTarget instanceof User) {
-                throw new AuthorizationException;
-            }
+                if (! $lockedActor instanceof User || ! $lockedTarget instanceof User) {
+                    throw new AuthorizationException;
+                }
 
-            if (! $lockedActor->is($lockedTarget)
-                && ! $this->authorization->allows($lockedActor, 'admin.users', null, true)) {
-                throw new AuthorizationException;
-            }
+                if (! $lockedActor->is($lockedTarget)
+                    && ! $this->authorization->allows($lockedActor, 'admin.users', null, true)) {
+                    throw new AuthorizationException;
+                }
 
-            $sessionIds = AuthSession::query()
-                ->where('user_id', $lockedTarget->getKey())
-                ->lockForUpdate()
-                ->pluck('session_id');
-            $lockedTarget->increment('session_version');
-            $this->events->security(
-                'identity.sessions.revoked_all',
-                $lockedActor,
-                $lockedTarget,
-                [],
-                $ipAddress,
-                $userAgent,
-                $correlationId,
-            );
-            DB::table('sessions')->whereIn('id', $sessionIds)->delete();
-            AuthSession::query()->where('user_id', $lockedTarget->getKey())->delete();
-        }, 3);
+                $sessionIds = AuthSession::query()
+                    ->where('user_id', $lockedTarget->getKey())
+                    ->lockForUpdate()
+                    ->pluck('session_id');
+                $lockedTarget->increment('session_version');
+                $this->events->security(
+                    'identity.sessions.revoked_all',
+                    $lockedActor,
+                    $lockedTarget,
+                    [],
+                    $ipAddress,
+                    $userAgent,
+                    $correlationId,
+                );
+                DB::table('sessions')->whereIn('id', $sessionIds)->delete();
+                AuthSession::query()->where('user_id', $lockedTarget->getKey())->delete();
+            }, 3);
+        }, $actor, self::class, $ipAddress, $userAgent, $correlationId);
     }
 }
